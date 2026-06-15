@@ -1,5 +1,28 @@
 @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Inter:wght@300;400;500;600;700&display=swap');
 @import "tailwindcss";
+@plugin "@tailwindcss/typography";
+
+/* Class-based dark mode for Tailwind v4 */
+@variant dark (&:is(.dark *));
+
+@theme {
+  /* Fonts */
+  --font-playfair: "Playfair Display", Georgia, serif;
+  --font-inter: Inter, system-ui, sans-serif;
+  --font-sans: Inter, system-ui, sans-serif;
+
+  /* Primary (violet) */
+  --color-primary-50: #f5f3ff;
+  --color-primary-100: #ede9fe;
+  --color-primary-200: #ddd6fe;
+  --color-primary-300: #c4b5fd;
+  --color-primary-400: #a78bfa;
+  --color-primary-500: #8b5cf6;
+  --color-primary-600: #7c3aed;
+  --color-primary-700: #6d28d9;
+  --color-primary-800: #5b21b6;
+  --color-primary-900: #4c1d95;
+}
 
 :root {
   --gradient-primary: linear-gradient(135deg, #7c3aed, #06b6d4);
@@ -24,4 +47,23 @@ body {
 
 h1, h2, h3, h4, h5, h6 {
   font-family: 'Playfair Display', Georgia, serif;
+}
+
+/* Markdown prose overrides for dark mode */
+.prose pre {
+  background: #1e1e2e;
+  border: 1px solid rgba(255,255,255,0.1);
+}
+
+.prose code {
+  background: rgba(124, 58, 237, 0.15);
+  color: #a78bfa;
+  padding: 0.15em 0.4em;
+  border-radius: 4px;
+  font-size: 0.875em;
+}
+
+.prose code::before,
+.prose code::after {
+  content: none;
 }
