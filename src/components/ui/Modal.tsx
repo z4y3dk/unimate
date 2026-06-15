@@ -1,7 +1,6 @@
 import { useEffect } from 'react'
 import ReactDOM from 'react-dom'
 import { X } from 'lucide-react'
-import { clsx } from 'clsx'
 
 interface ModalProps {
   isOpen: boolean
@@ -35,7 +34,7 @@ export default function Modal({ isOpen, onClose, title, children }: ModalProps) 
         className="absolute inset-0 bg-black/50 backdrop-blur-sm"
         onClick={onClose}
       />
-      <div className={clsx('relative z-10 w-full max-w-lg bg-white dark:bg-gray-900 border border-gray-200 dark:border-white/10 rounded-2xl shadow-xl')}>
+      <div className="relative z-10 w-full max-w-lg bg-white dark:bg-gray-900 border border-gray-200 dark:border-white/10 rounded-2xl shadow-xl">
         {title && (
           <div className="flex items-center justify-between p-6 border-b border-gray-200 dark:border-white/10">
             <h2 className="text-lg font-semibold text-gray-900 dark:text-white">{title}</h2>
