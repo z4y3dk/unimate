@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useState } from 'react'
-import { translations }
+import { translations } from '../utils/translations'
 import type { TranslationKey } from '../utils/translations'
 
 type Lang = 'en' | 'ar'
