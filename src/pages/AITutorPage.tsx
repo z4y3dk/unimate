@@ -1,14 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import ReactMarkdown from 'react-markdown'
 import Button from '../components/ui/Button'
-
-const COURSES = [
-  { id: 'all', label: 'All Courses' },
-  { id: 'bigdata', label: 'Big Data Analytics' },
-  { id: 'dbms', label: 'Database Management Systems' },
-  { id: 'ml', label: 'Machine Learning' },
-  { id: 'networks', label: 'Computer Networks' },
-]
+import { useCourses } from '../hooks/useCourses'
+import { useWeakSpots } from '../hooks/useWeakSpots'
+import { useGamification } from '../hooks/useGamification'
 
 const QUICK_PROMPTS = [
   'Explain MapReduce to me',
@@ -224,7 +219,12 @@ export default function AITutorPage() {
   const scrollAnchorRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
-  const selectedCourseLabel = COURSES.find((c) => c.id === selectedCourse)?.label ?? 'All Courses'
+  const { courses } = useCourses()
+  const { recordWrongAnswer } = useWeakSpots()
+  const { addXp } = useGamification()
+
+  const COURSE_OPTIONS = [{ id: 'all', label: 'All Courses' }, ...courses.map((c) => ({ id: c.id, label: c.name }))]
+  const selectedCourseLabel = COURSE_OPTIONS.find((c) => c.id === selectedCourse)?.label ?? 'All Courses'
 
   useEffect(() => {
     scrollAnchorRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -274,8 +274,21 @@ export default function AITutorPage() {
       setMessages((prev) => [...prev, aiMsg])
       setShowXP(true)
       setTimeout(() => setShowXP(false), 2000)
+
+      // If the question touches a known weak topic, record it and award XP
+      const lower = text.toLowerCase()
+      const weakTopic = lower.includes('mapreduce') || lower.includes('hadoop')
+        ? 'MapReduce'
+        : lower.includes('sql') || lower.includes('join')
+          ? 'SQL Joins'
+          : null
+      if (weakTopic) {
+        const courseId = selectedCourse !== 'all' ? selectedCourse : null
+        recordWrongAnswer(courseId, weakTopic)
+      }
+      addXp(5)
     },
-    [isTyping]
+    [isTyping, selectedCourse, recordWrongAnswer, addXp]
   )
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -320,7 +333,7 @@ export default function AITutorPage() {
               onChange={(e) => setSelectedCourse(e.target.value)}
               className="text-sm bg-white dark:bg-white/5 border border-gray-200 dark:border-white/10 rounded-xl px-3 py-1.5 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500 cursor-pointer"
             >
-              {COURSES.map((c) => (
+              {COURSE_OPTIONS.map((c) => (
                 <option key={c.id} value={c.id} className="bg-gray-900 text-white">
                   {c.label}
                 </option>
