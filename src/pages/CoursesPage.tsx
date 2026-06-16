@@ -207,7 +207,7 @@ export default function CoursesPage() {
 
   if (loading) {
     return (
-      <div className="p-6 max-w-7xl mx-auto space-y-6">
+      <div className="p-4 sm:p-6 max-w-7xl mx-auto space-y-6">
         <SkeletonLoader className="h-16 w-80 rounded-2xl" />
         <SkeletonLoader className="h-10 w-96 rounded-full" />
         <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -218,7 +218,7 @@ export default function CoursesPage() {
   }
 
   return (
-    <div className="p-6 max-w-7xl mx-auto space-y-6">
+    <div className="p-4 sm:p-6 max-w-7xl mx-auto space-y-6">
 
       {/* Header */}
       <div className="flex items-start justify-between gap-4">

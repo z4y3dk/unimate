@@ -103,7 +103,7 @@ export default function SettingsPage() {
 
   if (loading) {
     return (
-      <div className="p-6 max-w-2xl mx-auto space-y-6">
+      <div className="p-4 sm:p-6 max-w-2xl mx-auto space-y-6">
         <SkeletonLoader className="h-10 w-48 rounded-xl" />
         {[1, 2, 3, 4].map(i => <SkeletonLoader key={i} className="h-40 rounded-2xl" />)}
       </div>
@@ -111,7 +111,7 @@ export default function SettingsPage() {
   }
 
   return (
-    <div className="p-6 max-w-2xl mx-auto space-y-8">
+    <div className="p-4 sm:p-6 max-w-2xl mx-auto space-y-8">
       {/* Header */}
       <div>
         <h1 className="font-playfair text-3xl font-bold text-gray-900 dark:text-white">Settings</h1>
