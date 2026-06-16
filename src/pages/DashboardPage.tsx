@@ -107,9 +107,9 @@ export default function DashboardPage() {
 
   if (loading) {
     return (
-      <div className="p-6 max-w-7xl mx-auto space-y-6">
-        <SkeletonLoader className="h-24 w-96 rounded-2xl" />
-        <div className="grid grid-cols-3 gap-3">
+      <div className="p-4 sm:p-6 max-w-7xl mx-auto space-y-6">
+        <SkeletonLoader className="h-24 w-full sm:w-96 rounded-2xl" />
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           {[1, 2, 3].map(i => <SkeletonLoader key={i} className="h-20 rounded-2xl" />)}
         </div>
         <div className="grid lg:grid-cols-3 gap-6">
@@ -144,11 +144,11 @@ export default function DashboardPage() {
   const gpa = progress?.gpa ?? 0
 
   return (
-    <div className="p-6 max-w-7xl mx-auto space-y-6">
+    <div className="p-4 sm:p-6 max-w-7xl mx-auto space-y-6">
 
       {/* Greeting */}
       <div>
-        <h1 className="font-playfair text-3xl font-bold text-gray-900 dark:text-white">
+        <h1 className="font-playfair text-2xl sm:text-3xl font-bold text-gray-900 dark:text-white">
           {getGreeting(userName)}
         </h1>
         <p className="text-gray-500 dark:text-gray-400 mt-1 text-sm">
@@ -157,7 +157,7 @@ export default function DashboardPage() {
       </div>
 
       {/* Stats row */}
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         {[
           { icon: <Flame className="w-5 h-5 text-orange-400" />, value: `${streak} days`, label: 'Streak' },
           { icon: <Zap className="w-5 h-5 text-yellow-400" />, value: `${xp.toLocaleString()} XP`, label: 'Total XP' },

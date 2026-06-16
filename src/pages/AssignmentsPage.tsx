@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { format, isToday, isTomorrow, isPast, differenceInDays } from 'date-fns'
 import {
   Plus, ClipboardList, CheckCircle2, Clock, MessageSquare,
-  AlertCircle, ChevronDown, Filter,
+  AlertCircle, ChevronDown, Filter, Download,
 } from 'lucide-react'
 import Card from '../components/ui/Card'
 import Badge from '../components/ui/Badge'
@@ -12,6 +12,23 @@ import Modal from '../components/ui/Modal'
 import SkeletonLoader from '../components/ui/SkeletonLoader'
 import { useAssignments, type Assignment } from '../hooks/useAssignments'
 import { useCourses } from '../hooks/useCourses'
+import { downloadICS, type ICSEvent } from '../utils/ics'
+
+// ── Calendar export ───────────────────────────────────────────────────────────
+function exportAssignmentsToICS(assignments: Assignment[]) {
+  const events: ICSEvent[] = assignments.map(a => {
+    const due = new Date(a.due_date)
+    const end = new Date(due.getTime() + 30 * 60 * 1000) // 30-min block
+    return {
+      uid: `assignment-${a.id}@unimate`,
+      summary: `Due: ${a.title}`,
+      description: `${a.course_name}${a.description ? ` — ${a.description}` : ''}`,
+      start: due,
+      end,
+    }
+  })
+  downloadICS(events, 'unimate-assignments.ics', 'UniMate Assignments')
+}
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 type Status = Assignment['status']
@@ -244,7 +261,7 @@ export default function AssignmentsPage() {
 
   if (loading) {
     return (
-      <div className="p-6 max-w-4xl mx-auto space-y-4">
+      <div className="p-4 sm:p-6 max-w-4xl mx-auto space-y-4">
         <SkeletonLoader className="h-16 w-72 rounded-2xl" />
         <SkeletonLoader className="h-10 w-full rounded-2xl" />
         {[1, 2, 3, 4].map(i => <SkeletonLoader key={i} className="h-36 rounded-2xl" />)}
@@ -253,12 +270,12 @@ export default function AssignmentsPage() {
   }
 
   return (
-    <div className="p-6 max-w-4xl mx-auto space-y-5">
+    <div className="p-4 sm:p-6 max-w-4xl mx-auto space-y-5">
 
       {/* Header */}
-      <div className="flex items-start justify-between gap-4">
+      <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
         <div>
-          <h1 className="font-playfair text-3xl font-bold text-gray-900 dark:text-white">Assignments</h1>
+          <h1 className="font-playfair text-2xl sm:text-3xl font-bold text-gray-900 dark:text-white">Assignments</h1>
           <div className="flex items-center gap-3 mt-1">
             <span className="text-sm text-gray-500 dark:text-gray-400">{pending} pending</span>
             {overdue > 0 && (
@@ -268,10 +285,16 @@ export default function AssignmentsPage() {
             )}
           </div>
         </div>
-        <Button variant="primary" size="md" onClick={() => setShowAdd(true)}
-          className="flex items-center gap-2 flex-shrink-0">
-          <Plus className="w-4 h-4" /> Add
-        </Button>
+        <div className="flex items-center gap-2 flex-shrink-0">
+          <Button variant="secondary" size="md" onClick={() => exportAssignmentsToICS(assignments)}
+            className="flex items-center gap-2" disabled={assignments.length === 0}>
+            <Download className="w-4 h-4" /> <span className="hidden sm:inline">Export to Calendar</span><span className="sm:hidden">Export</span>
+          </Button>
+          <Button variant="primary" size="md" onClick={() => setShowAdd(true)}
+            className="flex items-center gap-2">
+            <Plus className="w-4 h-4" /> Add
+          </Button>
+        </div>
       </div>
 
       {/* Filters */}

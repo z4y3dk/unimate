@@ -78,8 +78,8 @@ function AddCourseModal({ onClose, onAdd }: AddCourseModalProps) {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-      <Card className="w-full max-w-md p-6">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/60 backdrop-blur-sm">
+      <Card className="w-full max-w-md max-h-[90vh] overflow-y-auto p-4 sm:p-6">
         <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Add Past Course</h2>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
@@ -478,7 +478,7 @@ export default function PlannerPage() {
   ]
 
   return (
-    <div className="p-6 max-w-7xl mx-auto space-y-6">
+    <div className="p-4 sm:p-6 max-w-7xl mx-auto space-y-6">
       {/* Header */}
       <div>
         <h1 className="font-playfair text-3xl font-bold text-gray-900 dark:text-white">Planner</h1>

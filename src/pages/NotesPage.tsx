@@ -315,7 +315,7 @@ export default function NotesPage() {
       {/* Sidebar */}
       <aside
         className={[
-          'flex-shrink-0 w-72 flex flex-col',
+          'flex-shrink-0 w-full md:w-72 flex flex-col',
           'bg-gray-50 dark:bg-white/[0.03] border-r border-gray-200 dark:border-white/10',
           showMobileEditor ? 'hidden md:flex' : 'flex',
         ].join(' ')}

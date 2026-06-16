@@ -61,7 +61,7 @@ export default function CourseDetailPage() {
 
   if (loading) {
     return (
-      <div className="p-6 max-w-5xl mx-auto space-y-6">
+      <div className="p-4 sm:p-6 max-w-5xl mx-auto space-y-6">
         <SkeletonLoader className="h-10 w-48 rounded-xl" />
         <SkeletonLoader className="h-32 rounded-2xl" />
         <SkeletonLoader className="h-64 rounded-2xl" />
@@ -71,7 +71,7 @@ export default function CourseDetailPage() {
 
   if (!course) {
     return (
-      <div className="p-6 max-w-5xl mx-auto text-center py-20">
+      <div className="p-4 sm:p-6 max-w-5xl mx-auto text-center py-20">
         <p className="text-gray-500 dark:text-gray-400">Course not found.</p>
         <Button variant="secondary" className="mt-4" onClick={() => navigate('/courses')}>
           <ArrowLeft className="w-4 h-4 mr-1" /> Back to Courses
@@ -110,7 +110,7 @@ export default function CourseDetailPage() {
   }
 
   return (
-    <div className="p-6 max-w-5xl mx-auto space-y-6">
+    <div className="p-4 sm:p-6 max-w-5xl mx-auto space-y-6">
       {/* Header */}
       <div className="flex items-start gap-3">
         <button
