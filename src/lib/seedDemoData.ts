@@ -1,4 +1,7 @@
 import { supabase } from './supabase'
+import type { Database } from './database.types'
+
+type CourseInsert = Database['public']['Tables']['courses']['Insert']
 
 // Populates a brand-new account with realistic starter data so the app
 // isn't empty on first login. Safe to call multiple times — checks first.
@@ -10,7 +13,7 @@ export async function seedDemoDataIfEmpty(userId: string) {
 
   if (count && count > 0) return // already has data
 
-  const courses = [
+  const courses: CourseInsert[] = [
     { user_id: userId, name: 'Big Data Analytics', code: 'IS401', instructor: 'Dr. Al Mansoori', color: '#7c3aed', status: 'active', credits: 3, progress: 65 },
     { user_id: userId, name: 'Database Systems', code: 'IS312', instructor: 'Dr. Hassan', color: '#0891b2', status: 'active', credits: 3, progress: 48 },
     { user_id: userId, name: 'Applied Statistics', code: 'MATH301', instructor: 'Dr. Fatima Al Zaabi', color: '#059669', status: 'active', credits: 3, progress: 72 },

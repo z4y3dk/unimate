@@ -15,6 +15,7 @@ export interface Database {
         }
         Insert: Partial<Database['public']['Tables']['profiles']['Row']> & { id: string }
         Update: Partial<Database['public']['Tables']['profiles']['Row']>
+        Relationships: never[]
       }
       courses: {
         Row: {
@@ -35,6 +36,7 @@ export interface Database {
         }
         Insert: Partial<Database['public']['Tables']['courses']['Row']> & { user_id: string; name: string }
         Update: Partial<Database['public']['Tables']['courses']['Row']>
+        Relationships: never[]
       }
       class_schedule: {
         Row: {
@@ -53,6 +55,7 @@ export interface Database {
           user_id: string; course_name: string; day_of_week: number; start_time: string; end_time: string
         }
         Update: Partial<Database['public']['Tables']['class_schedule']['Row']>
+        Relationships: never[]
       }
       assignments: {
         Row: {
@@ -73,6 +76,7 @@ export interface Database {
           user_id: string; course_name: string; title: string; due_date: string
         }
         Update: Partial<Database['public']['Tables']['assignments']['Row']>
+        Relationships: never[]
       }
       notes: {
         Row: {
@@ -89,6 +93,7 @@ export interface Database {
         }
         Insert: Partial<Database['public']['Tables']['notes']['Row']> & { user_id: string }
         Update: Partial<Database['public']['Tables']['notes']['Row']>
+        Relationships: never[]
       }
       weak_spots: {
         Row: {
@@ -102,6 +107,7 @@ export interface Database {
         }
         Insert: Partial<Database['public']['Tables']['weak_spots']['Row']> & { user_id: string; topic: string }
         Update: Partial<Database['public']['Tables']['weak_spots']['Row']>
+        Relationships: never[]
       }
       gamification: {
         Row: {
@@ -115,6 +121,7 @@ export interface Database {
         }
         Insert: Partial<Database['public']['Tables']['gamification']['Row']> & { user_id: string }
         Update: Partial<Database['public']['Tables']['gamification']['Row']>
+        Relationships: never[]
       }
       graduation_progress: {
         Row: {
@@ -127,6 +134,7 @@ export interface Database {
         }
         Insert: Partial<Database['public']['Tables']['graduation_progress']['Row']> & { user_id: string }
         Update: Partial<Database['public']['Tables']['graduation_progress']['Row']>
+        Relationships: never[]
       }
       study_sessions: {
         Row: {
@@ -144,7 +152,12 @@ export interface Database {
           user_id: string; day_of_week: string; course_name: string; topic: string
         }
         Update: Partial<Database['public']['Tables']['study_sessions']['Row']>
+        Relationships: never[]
       }
     }
+    Views: Record<string, never>
+    Functions: Record<string, never>
+    Enums: Record<string, never>
+    CompositeTypes: Record<string, never>
   }
 }
