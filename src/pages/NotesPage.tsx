@@ -3,6 +3,8 @@ import ReactMarkdown from 'react-markdown'
 import Button from '../components/ui/Button'
 import { useNotes } from '../hooks/useNotes'
 import { useCourses } from '../hooks/useCourses'
+import { useNoteFolders } from '../hooks/useNoteFolders'
+import { useNotePages } from '../hooks/useNotePages'
 import {
   Search,
   Plus,
@@ -19,6 +21,12 @@ import {
   Sparkles,
   Loader2,
   ChevronLeft,
+  Folder,
+  FolderPlus,
+  X,
+  Tag,
+  ChevronRight,
+  FileText,
 } from 'lucide-react'
 
 const AI_MOCK: Record<string, string> = {
@@ -92,19 +100,35 @@ function drawStrokes(canvas: HTMLCanvasElement, strokeList: Stroke[]) {
 export default function NotesPage() {
   const { notes, loading, addNote, updateNote, deleteNote } = useNotes()
   const { courses } = useCourses()
+  const { folders, addFolder, updateFolder, deleteFolder } = useNoteFolders()
 
   const [activeNoteId, setActiveNoteId] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedCourse, setSelectedCourse] = useState('All Courses')
+  const [selectedFolderId, setSelectedFolderId] = useState<string | 'all'>('all')
+  const [selectedTag, setSelectedTag] = useState<string | null>(null)
   const [editorMode, setEditorMode] = useState<EditorMode>('write')
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle')
   const [aiOutput, setAiOutput] = useState<string | null>(null)
   const [aiLoading, setAiLoading] = useState(false)
   const [showMobileEditor, setShowMobileEditor] = useState(false)
 
+  // Folder management UI
+  const [showFolderEditor, setShowFolderEditor] = useState(false)
+  const [newFolderName, setNewFolderName] = useState('')
+  const [renamingFolderId, setRenamingFolderId] = useState<string | null>(null)
+  const [renameValue, setRenameValue] = useState('')
+
+  // Tag input
+  const [tagInput, setTagInput] = useState('')
+
   // Local content/title buffers so typing doesn't wait on round-trips
   const [draftContent, setDraftContent] = useState('')
   const [draftTitle, setDraftTitle] = useState('')
+
+  // Pages (multi-page notes)
+  const { pages, addPage, updatePage, deletePage } = useNotePages(activeNoteId)
+  const [activePageIndex, setActivePageIndex] = useState(0)
 
   // Draw state
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -126,20 +150,30 @@ export default function NotesPage() {
   }, [notes, activeNoteId])
 
   const activeNote = notes.find((n) => n.id === activeNoteId) ?? null
+  const activePage = pages[activePageIndex] ?? null
 
   // Sync draft buffers when active note changes
   useEffect(() => {
-    setDraftContent(activeNote?.content ?? '')
     setDraftTitle(activeNote?.title ?? '')
+    setActivePageIndex(0)
   }, [activeNote?.id]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Sync draft content when the active page changes (pages loaded/changed/switched)
+  useEffect(() => {
+    setDraftContent(activePage?.content ?? activeNote?.content ?? '')
+  }, [activePage?.id, activeNote?.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const courseNames = courses.map((c) => c.name)
   const COURSES_FILTER = ['All Courses', ...courseNames]
 
+  const allTags = Array.from(new Set(notes.flatMap((n) => n.tags ?? []))).sort()
+
   const filteredNotes = notes.filter((n) => {
     const matchSearch = n.title.toLowerCase().includes(searchQuery.toLowerCase())
     const matchCourse = selectedCourse === 'All Courses' || n.course_name === selectedCourse
-    return matchSearch && matchCourse
+    const matchFolder = selectedFolderId === 'all' || n.folder_id === selectedFolderId
+    const matchTag = !selectedTag || (n.tags ?? []).includes(selectedTag)
+    return matchSearch && matchCourse && matchFolder && matchTag
   })
 
   // Redraw canvas when switching to draw mode
@@ -149,21 +183,24 @@ export default function NotesPage() {
     }
   }, [editorMode]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Auto-save debounce
+  // Auto-save debounce (writes to the active page; falls back to note.content for page 1
+  // when no note_pages row exists yet, e.g. legacy notes not yet backfilled)
   const handleContentChange = useCallback(
     (value: string) => {
       setDraftContent(value)
       setSaveStatus('saving')
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
       saveTimerRef.current = setTimeout(() => {
-        if (activeNoteId) {
+        if (activePage) {
+          updatePage(activePage.id, { content: value })
+        } else if (activeNoteId) {
           updateNote(activeNoteId, { content: value })
         }
         setSaveStatus('saved')
         setTimeout(() => setSaveStatus('idle'), 2000)
       }, 2000)
     },
-    [activeNoteId, updateNote]
+    [activeNoteId, activePage, updateNote, updatePage]
   )
 
   const handleTitleChange = useCallback(
@@ -273,6 +310,75 @@ export default function NotesPage() {
     setAiLoading(false)
   }
 
+  // ── Page navigation ───────────────────────────────────────────────────
+  const handleAddPage = async () => {
+    const nextPageNumber = (pages[pages.length - 1]?.page_number ?? 0) + 1
+    const result = await addPage({ page_number: nextPageNumber, content: '', canvas_data: null })
+    if (result?.data) {
+      setActivePageIndex(pages.length)
+    }
+  }
+
+  const handlePrevPage = () => {
+    setActivePageIndex((i) => Math.max(0, i - 1))
+  }
+
+  const handleNextPage = () => {
+    setActivePageIndex((i) => Math.min(pages.length - 1, i + 1))
+  }
+
+  const handleDeletePage = async (id: string) => {
+    if (pages.length <= 1) return
+    await deletePage(id)
+    setActivePageIndex((i) => Math.max(0, i - 1))
+  }
+
+  // ── Folder management ────────────────────────────────────────────────
+  const handleCreateFolder = async () => {
+    const name = newFolderName.trim()
+    if (!name) return
+    await addFolder({ name })
+    setNewFolderName('')
+  }
+
+  const handleStartRenameFolder = (id: string, currentName: string) => {
+    setRenamingFolderId(id)
+    setRenameValue(currentName)
+  }
+
+  const handleConfirmRenameFolder = async () => {
+    const name = renameValue.trim()
+    if (renamingFolderId && name) {
+      await updateFolder(renamingFolderId, { name })
+    }
+    setRenamingFolderId(null)
+    setRenameValue('')
+  }
+
+  const handleDeleteFolder = async (id: string) => {
+    await deleteFolder(id)
+    if (selectedFolderId === id) setSelectedFolderId('all')
+  }
+
+  // ── Tag management ───────────────────────────────────────────────────
+  const handleAddTag = async () => {
+    const tag = tagInput.trim()
+    if (!tag || !activeNote) return
+    const existing = activeNote.tags ?? []
+    if (existing.includes(tag)) {
+      setTagInput('')
+      return
+    }
+    await updateNote(activeNote.id, { tags: [...existing, tag] })
+    setTagInput('')
+  }
+
+  const handleRemoveTag = async (tag: string) => {
+    if (!activeNote) return
+    const existing = activeNote.tags ?? []
+    await updateNote(activeNote.id, { tags: existing.filter((t) => t !== tag) })
+  }
+
   const handleNewNote = async () => {
     const firstCourse = courses[0]
     const result = await addNote({
@@ -354,6 +460,112 @@ export default function NotesPage() {
               </option>
             ))}
           </select>
+
+          {/* Folder filter */}
+          <div className="flex items-center gap-2">
+            <select
+              value={selectedFolderId}
+              onChange={(e) => setSelectedFolderId(e.target.value)}
+              className="flex-1 px-3 py-1.5 text-sm bg-white dark:bg-white/5 border border-gray-200 dark:border-white/10 rounded-lg text-gray-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-violet-500"
+            >
+              <option value="all">All Folders</option>
+              {folders.map((f) => (
+                <option key={f.id} value={f.id}>
+                  {f.name}
+                </option>
+              ))}
+            </select>
+            <button
+              onClick={() => setShowFolderEditor((v) => !v)}
+              title="Manage folders"
+              className={[
+                'p-1.5 rounded-md transition-colors flex-shrink-0',
+                showFolderEditor
+                  ? 'bg-violet-100 dark:bg-violet-900/40 text-violet-600 dark:text-violet-400'
+                  : 'text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-white/10',
+              ].join(' ')}
+            >
+              <FolderPlus size={16} />
+            </button>
+          </div>
+
+          {/* Folder editor */}
+          {showFolderEditor && (
+            <div className="space-y-2 p-2 bg-white dark:bg-white/5 border border-gray-200 dark:border-white/10 rounded-lg">
+              <div className="flex items-center gap-1">
+                <input
+                  type="text"
+                  placeholder="New folder name..."
+                  value={newFolderName}
+                  onChange={(e) => setNewFolderName(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleCreateFolder()}
+                  className="flex-1 px-2 py-1 text-xs bg-gray-50 dark:bg-white/5 border border-gray-200 dark:border-white/10 rounded-md text-gray-900 dark:text-white placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-violet-500"
+                />
+                <button
+                  onClick={handleCreateFolder}
+                  className="p-1 rounded-md text-violet-600 hover:bg-violet-50 dark:hover:bg-violet-900/20"
+                  title="Add folder"
+                >
+                  <Plus size={14} />
+                </button>
+              </div>
+              {folders.length === 0 ? (
+                <p className="text-xs text-gray-400 text-center py-1">No folders yet</p>
+              ) : (
+                folders.map((f) => (
+                  <div key={f.id} className="flex items-center gap-2 px-1">
+                    <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: f.color }} />
+                    {renamingFolderId === f.id ? (
+                      <input
+                        autoFocus
+                        type="text"
+                        value={renameValue}
+                        onChange={(e) => setRenameValue(e.target.value)}
+                        onKeyDown={(e) => e.key === 'Enter' && handleConfirmRenameFolder()}
+                        onBlur={handleConfirmRenameFolder}
+                        className="flex-1 px-1 py-0.5 text-xs bg-gray-50 dark:bg-white/10 border border-violet-300 dark:border-violet-700 rounded text-gray-900 dark:text-white focus:outline-none"
+                      />
+                    ) : (
+                      <button
+                        onClick={() => handleStartRenameFolder(f.id, f.name)}
+                        className="flex-1 text-left text-xs text-gray-700 dark:text-gray-300 truncate hover:text-violet-600 dark:hover:text-violet-400"
+                      >
+                        {f.name}
+                      </button>
+                    )}
+                    <button
+                      onClick={() => handleDeleteFolder(f.id)}
+                      className="p-0.5 rounded text-gray-400 hover:text-red-500"
+                      title="Delete folder"
+                    >
+                      <X size={12} />
+                    </button>
+                  </div>
+                ))
+              )}
+            </div>
+          )}
+
+          {/* Tag filter */}
+          {allTags.length > 0 && (
+            <div className="flex items-center gap-1 flex-wrap">
+              <Tag size={12} className="text-gray-400 flex-shrink-0" />
+              {allTags.map((tag) => (
+                <button
+                  key={tag}
+                  onClick={() => setSelectedTag((t) => (t === tag ? null : tag))}
+                  className={[
+                    'px-2 py-0.5 text-xs rounded-full transition-colors',
+                    selectedTag === tag
+                      ? 'bg-violet-500 text-white'
+                      : 'bg-gray-100 dark:bg-white/10 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-white/20',
+                  ].join(' ')}
+                >
+                  {tag}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Note list */}
@@ -385,6 +597,22 @@ export default function NotesPage() {
                       <p className="text-xs text-gray-400 dark:text-gray-500 mt-0.5 truncate">
                         {note.content.replace(/[#*\-`]/g, '').slice(0, 60)}
                       </p>
+                      <div className="flex items-center gap-2 mt-1 flex-wrap">
+                        {note.folder_id && (
+                          <span className="inline-flex items-center gap-0.5 text-[10px] text-gray-400 dark:text-gray-500">
+                            <Folder size={10} />
+                            {folders.find((f) => f.id === note.folder_id)?.name}
+                          </span>
+                        )}
+                        {(note.tags ?? []).slice(0, 3).map((tag) => (
+                          <span
+                            key={tag}
+                            className="px-1.5 py-0.5 text-[10px] rounded-full bg-gray-100 dark:bg-white/10 text-gray-500 dark:text-gray-400"
+                          >
+                            {tag}
+                          </span>
+                        ))}
+                      </div>
                       <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">{formatRelative(note.updated_at)}</p>
                     </div>
                   </div>
@@ -461,6 +689,97 @@ export default function NotesPage() {
                     </button>
                   ))}
                 </div>
+              </div>
+            </div>
+
+            {/* Folder / tags / page bar */}
+            <div className="flex items-center justify-between gap-3 px-4 py-2 border-b border-gray-200 dark:border-white/10 flex-shrink-0 flex-wrap">
+              <div className="flex items-center gap-3 flex-wrap min-w-0">
+                {/* Folder assignment */}
+                <div className="flex items-center gap-1">
+                  <Folder size={14} className="text-gray-400" />
+                  <select
+                    value={activeNote.folder_id ?? ''}
+                    onChange={(e) => updateNote(activeNote.id, { folder_id: e.target.value || null })}
+                    className="text-xs bg-gray-100 dark:bg-white/5 border border-gray-200 dark:border-white/10 rounded-md px-1.5 py-1 text-gray-700 dark:text-gray-300 focus:outline-none focus:ring-1 focus:ring-violet-500"
+                  >
+                    <option value="">No Folder</option>
+                    {folders.map((f) => (
+                      <option key={f.id} value={f.id}>
+                        {f.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Tags */}
+                <div className="flex items-center gap-1 flex-wrap">
+                  <Tag size={14} className="text-gray-400" />
+                  {(activeNote.tags ?? []).map((tag) => (
+                    <span
+                      key={tag}
+                      className="inline-flex items-center gap-1 px-1.5 py-0.5 text-xs rounded-full bg-violet-50 dark:bg-violet-900/30 text-violet-600 dark:text-violet-400"
+                    >
+                      {tag}
+                      <button onClick={() => handleRemoveTag(tag)} className="hover:text-red-500">
+                        <X size={10} />
+                      </button>
+                    </span>
+                  ))}
+                  <input
+                    type="text"
+                    placeholder="Add tag..."
+                    value={tagInput}
+                    onChange={(e) => setTagInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ',') {
+                        e.preventDefault()
+                        handleAddTag()
+                      }
+                    }}
+                    className="w-20 px-1.5 py-0.5 text-xs bg-transparent border border-dashed border-gray-300 dark:border-white/20 rounded-md text-gray-700 dark:text-gray-300 placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-violet-500"
+                  />
+                </div>
+              </div>
+
+              {/* Page navigation */}
+              <div className="flex items-center gap-1 flex-shrink-0">
+                <FileText size={14} className="text-gray-400" />
+                <button
+                  onClick={handlePrevPage}
+                  disabled={activePageIndex === 0}
+                  className="p-1 rounded-md text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-white/10 disabled:opacity-30 transition-colors"
+                  title="Previous page"
+                >
+                  <ChevronLeft size={14} />
+                </button>
+                <span className="text-xs text-gray-500 dark:text-gray-400 min-w-[70px] text-center">
+                  Page {pages.length > 0 ? activePageIndex + 1 : 1} / {pages.length > 0 ? pages.length : 1}
+                </span>
+                <button
+                  onClick={handleNextPage}
+                  disabled={activePageIndex >= pages.length - 1}
+                  className="p-1 rounded-md text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-white/10 disabled:opacity-30 transition-colors"
+                  title="Next page"
+                >
+                  <ChevronRight size={14} />
+                </button>
+                <button
+                  onClick={handleAddPage}
+                  className="p-1 rounded-md text-violet-600 hover:bg-violet-50 dark:hover:bg-violet-900/20 transition-colors"
+                  title="Add page"
+                >
+                  <Plus size={14} />
+                </button>
+                {pages.length > 1 && activePage && (
+                  <button
+                    onClick={() => handleDeletePage(activePage.id)}
+                    className="p-1 rounded-md text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+                    title="Delete page"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                )}
               </div>
             </div>
 

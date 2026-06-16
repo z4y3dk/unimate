@@ -90,11 +90,39 @@ export interface Database {
           title: string
           content: string
           canvas_data: string | null
+          folder_id: string | null
+          tags: string[]
           updated_at: string
           created_at: string
         }
         Insert: Partial<Database['public']['Tables']['notes']['Row']> & { user_id: string }
         Update: Partial<Database['public']['Tables']['notes']['Row']>
+        Relationships: never[]
+      }
+      note_folders: {
+        Row: {
+          id: string
+          user_id: string
+          name: string
+          color: string
+          created_at: string
+        }
+        Insert: Partial<Database['public']['Tables']['note_folders']['Row']> & { user_id: string; name: string }
+        Update: Partial<Database['public']['Tables']['note_folders']['Row']>
+        Relationships: never[]
+      }
+      note_pages: {
+        Row: {
+          id: string
+          note_id: string
+          user_id: string
+          page_number: number
+          content: string
+          canvas_data: string | null
+          created_at: string
+        }
+        Insert: Partial<Database['public']['Tables']['note_pages']['Row']> & { note_id: string; user_id: string }
+        Update: Partial<Database['public']['Tables']['note_pages']['Row']>
         Relationships: never[]
       }
       weak_spots: {
