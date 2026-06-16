@@ -70,6 +70,8 @@ export interface Database {
           type: 'assignment' | 'quiz' | 'project' | 'exam' | 'lab'
           status: 'pending' | 'in_progress' | 'submitted' | 'graded'
           priority: 'low' | 'medium' | 'high'
+          points_earned: number | null
+          points_possible: number | null
           created_at: string
         }
         Insert: Partial<Database['public']['Tables']['assignments']['Row']> & {

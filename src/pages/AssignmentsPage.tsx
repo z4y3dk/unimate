@@ -1,9 +1,9 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { format, isToday, isTomorrow, isPast, differenceInDays } from 'date-fns'
 import {
   Plus, ClipboardList, CheckCircle2, Clock, MessageSquare,
-  AlertCircle, ChevronDown, Filter,
+  AlertCircle, ChevronDown, Filter, GraduationCap,
 } from 'lucide-react'
 import Card from '../components/ui/Card'
 import Badge from '../components/ui/Badge'
@@ -42,14 +42,17 @@ const PRIORITY_COLORS: Record<Priority, string> = {
 
 // ── Assignment Card ───────────────────────────────────────────────────────────
 function AssignmentCard({
-  a, onMarkComplete, onAskAI,
+  a, onMarkComplete, onAskAI, onGrade,
 }: {
   a: Assignment
   onMarkComplete: (id: string) => void
   onAskAI: (a: Assignment) => void
+  onGrade: (a: Assignment) => void
 }) {
   const done = a.status === 'submitted' || a.status === 'graded'
   const dueDate = new Date(a.due_date)
+  const hasScore = a.points_earned != null && a.points_possible != null && a.points_possible > 0
+  const pct = hasScore ? Math.round((a.points_earned! / a.points_possible!) * 1000) / 10 : null
 
   return (
     <Card className={`p-4 transition-all duration-200 ${done ? 'opacity-60' : ''}`}>
@@ -77,6 +80,11 @@ function AssignmentCard({
             <span className={`text-xs font-medium ${PRIORITY_COLORS[a.priority]}`}>
               ● {a.priority} priority
             </span>
+            {hasScore && (
+              <span className="text-xs font-semibold text-violet-600 dark:text-violet-400">
+                {a.points_earned}/{a.points_possible} ({pct}%)
+              </span>
+            )}
           </div>
 
           {/* Description */}
@@ -88,26 +96,91 @@ function AssignmentCard({
               <Clock className="w-3 h-3" />
               {format(dueDate, 'EEE, d MMM yyyy · h:mm a')}
             </span>
-            {!done && (
-              <div className="flex gap-2">
+            <div className="flex gap-2">
+              {!done && (
+                <>
+                  <button
+                    onClick={() => onAskAI(a)}
+                    className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium text-violet-600 dark:text-violet-400 hover:bg-violet-50 dark:hover:bg-violet-900/20 border border-violet-200 dark:border-violet-700/50 transition-colors"
+                  >
+                    <MessageSquare className="w-3 h-3" /> Ask AI
+                  </button>
+                  <button
+                    onClick={() => onMarkComplete(a.id)}
+                    className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-700/50 transition-colors"
+                  >
+                    <CheckCircle2 className="w-3 h-3" /> Mark Complete
+                  </button>
+                </>
+              )}
+              {a.status === 'submitted' || a.status === 'graded' ? (
                 <button
-                  onClick={() => onAskAI(a)}
-                  className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium text-violet-600 dark:text-violet-400 hover:bg-violet-50 dark:hover:bg-violet-900/20 border border-violet-200 dark:border-violet-700/50 transition-colors"
+                  onClick={() => onGrade(a)}
+                  className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 border border-blue-200 dark:border-blue-700/50 transition-colors"
                 >
-                  <MessageSquare className="w-3 h-3" /> Ask AI
+                  <GraduationCap className="w-3 h-3" /> {hasScore ? 'Edit Grade' : 'Add Grade'}
                 </button>
-                <button
-                  onClick={() => onMarkComplete(a.id)}
-                  className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-700/50 transition-colors"
-                >
-                  <CheckCircle2 className="w-3 h-3" /> Mark Complete
-                </button>
-              </div>
-            )}
+              ) : null}
+            </div>
           </div>
         </div>
       </div>
     </Card>
+  )
+}
+
+// ── Grade Modal ───────────────────────────────────────────────────────────────
+function GradeModal({ isOpen, assignment, onClose, onSave }: {
+  isOpen: boolean
+  assignment: Assignment | null
+  onClose: () => void
+  onSave: (id: string, pointsEarned: number, pointsPossible: number) => void
+}) {
+  const [earned, setEarned] = useState('')
+  const [possible, setPossible] = useState('')
+
+  useEffect(() => {
+    if (isOpen && assignment) {
+      setEarned(assignment.points_earned != null ? String(assignment.points_earned) : '')
+      setPossible(assignment.points_possible != null ? String(assignment.points_possible) : '')
+    }
+  }, [isOpen, assignment])
+
+  const field = 'w-full px-3 py-2 rounded-xl border border-gray-200 dark:border-white/10 bg-white dark:bg-white/5 text-gray-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-violet-500'
+
+  function handleSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    if (!assignment) return
+    const e1 = parseFloat(earned)
+    const p1 = parseFloat(possible)
+    if (Number.isNaN(e1) || Number.isNaN(p1) || p1 <= 0) return
+    onSave(assignment.id, e1, p1)
+    setEarned('')
+    setPossible('')
+    onClose()
+  }
+
+  return (
+    <Modal isOpen={isOpen} onClose={onClose} title={`Grade: ${assignment?.title ?? ''}`}>
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Points Earned</label>
+            <input type="number" step="0.1" min="0" className={field} value={earned}
+              onChange={e => setEarned(e.target.value)} />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Points Possible</label>
+            <input type="number" step="0.1" min="0.1" className={field} value={possible}
+              onChange={e => setPossible(e.target.value)} />
+          </div>
+        </div>
+        <div className="flex gap-3 pt-1">
+          <Button type="button" variant="secondary" className="flex-1" onClick={onClose}>Cancel</Button>
+          <Button type="submit" variant="primary" className="flex-1">Save Grade</Button>
+        </div>
+      </form>
+    </Modal>
   )
 }
 
@@ -194,12 +267,13 @@ function AddAssignmentModal({ isOpen, onClose, onAdd, courses }: {
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
 export default function AssignmentsPage() {
-  const { assignments, loading, addAssignment, updateAssignment } = useAssignments()
+  const { assignments, loading, addAssignment, updateAssignment, gradeAssignment } = useAssignments()
   const { courses } = useCourses()
   const [statusFilter, setStatusFilter] = useState<'all' | Status>('all')
   const [courseFilter, setCourseFilter] = useState('all')
   const [showAdd, setShowAdd] = useState(false)
   const [showFilters, setShowFilters] = useState(false)
+  const [gradingAssignment, setGradingAssignment] = useState<Assignment | null>(null)
   const navigate = useNavigate()
 
   const courseOptions = courses.length > 0
@@ -212,6 +286,10 @@ export default function AssignmentsPage() {
 
   function askAI(a: Assignment) {
     navigate(`/ai-tutor?assignment=${encodeURIComponent(a.title)}&course=${encodeURIComponent(a.course_name)}`)
+  }
+
+  async function saveGrade(id: string, pointsEarned: number, pointsPossible: number) {
+    await gradeAssignment(id, pointsEarned, pointsPossible)
   }
 
   const filtered = assignments.filter(a => {
@@ -344,7 +422,13 @@ export default function AssignmentsPage() {
       ) : (
         <div className="space-y-3">
           {sorted.map(a => (
-            <AssignmentCard key={a.id} a={a} onMarkComplete={markComplete} onAskAI={askAI} />
+            <AssignmentCard
+              key={a.id}
+              a={a}
+              onMarkComplete={markComplete}
+              onAskAI={askAI}
+              onGrade={setGradingAssignment}
+            />
           ))}
         </div>
       )}
@@ -354,6 +438,13 @@ export default function AssignmentsPage() {
         onClose={() => setShowAdd(false)}
         onAdd={a => addAssignment(a)}
         courses={courseOptions}
+      />
+
+      <GradeModal
+        isOpen={gradingAssignment != null}
+        assignment={gradingAssignment}
+        onClose={() => setGradingAssignment(null)}
+        onSave={saveGrade}
       />
     </div>
   )

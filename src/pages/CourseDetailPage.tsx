@@ -14,6 +14,7 @@ import { useCourses, getCourse, type Course } from '../hooks/useCourses'
 import { useAssignments } from '../hooks/useAssignments'
 import { useNotes } from '../hooks/useNotes'
 import { useWeakSpots } from '../hooks/useWeakSpots'
+import { calculateCourseGrade } from '../utils/gpa'
 
 const TABS = [
   { key: 'info', label: 'Info', icon: BookOpen },
@@ -316,20 +317,74 @@ export default function CourseDetailPage() {
         </Card>
       )}
 
-      {tab === 'grades' && (
-        <Card className="p-6 space-y-3">
-          <div className="flex items-center gap-3">
-            <GraduationCap className="w-6 h-6 text-violet-500" />
-            <div>
-              <p className="text-sm text-gray-500 dark:text-gray-400">Current grade</p>
-              <p className="text-xl font-semibold text-gray-900 dark:text-white">{course.grade ?? 'Not graded yet'}</p>
-            </div>
+      {tab === 'grades' && (() => {
+        const gradedAssignments = courseAssignments.filter(
+          a => a.points_earned != null && a.points_possible != null
+        )
+        const computed = calculateCourseGrade(courseAssignments, course.grade)
+        return (
+          <div className="space-y-4">
+            <Card className="p-6 space-y-1">
+              <div className="flex items-center gap-3">
+                <GraduationCap className="w-6 h-6 text-violet-500" />
+                <div>
+                  <p className="text-sm text-gray-500 dark:text-gray-400">Current grade</p>
+                  <p className="text-xl font-semibold text-gray-900 dark:text-white">
+                    {computed.letter ?? 'Not graded yet'}
+                    {computed.percentage != null && (
+                      <span className="ml-2 text-sm font-normal text-gray-500 dark:text-gray-400">
+                        ({computed.percentage}%)
+                      </span>
+                    )}
+                  </p>
+                </div>
+              </div>
+              <p className="text-xs text-gray-500 dark:text-gray-400 pt-2">
+                {computed.source === 'assignments'
+                  ? 'Computed from graded assignments below.'
+                  : computed.source === 'manual'
+                    ? 'Based on the manually-entered grade — grade individual assignments to compute this automatically.'
+                    : 'No grades recorded yet.'}
+              </p>
+            </Card>
+
+            <Card className="p-6">
+              <h3 className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-3">
+                Graded Assignments
+              </h3>
+              {assignmentsLoading ? (
+                <SkeletonLoader className="h-32 rounded-xl" />
+              ) : gradedAssignments.length === 0 ? (
+                <p className="text-sm text-gray-500 dark:text-gray-400 py-6 text-center">
+                  No assignments graded yet for this course.
+                </p>
+              ) : (
+                <div className="space-y-2">
+                  {gradedAssignments.map(a => {
+                    const pct = Math.round((a.points_earned! / a.points_possible!) * 1000) / 10
+                    return (
+                      <div
+                        key={a.id}
+                        className="flex items-center justify-between gap-3 p-3 rounded-xl bg-gray-50 dark:bg-white/5"
+                      >
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium text-gray-900 dark:text-white truncate">{a.title}</p>
+                          <p className="text-xs text-gray-500 dark:text-gray-400">
+                            {a.points_earned} / {a.points_possible} pts
+                          </p>
+                        </div>
+                        <Badge variant={pct >= 90 ? 'success' : pct >= 70 ? 'info' : 'warning'}>
+                          {pct}%
+                        </Badge>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </Card>
           </div>
-          <p className="text-xs text-gray-500 dark:text-gray-400">
-            Detailed grade breakdown isn't tracked yet — this is a placeholder until grading is wired up.
-          </p>
-        </Card>
-      )}
+        )
+      })()}
 
       {tab === 'ai' && (
         <Card className="p-6 space-y-3">

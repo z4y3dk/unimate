@@ -4,8 +4,9 @@ import Card from '../components/ui/Card'
 import Button from '../components/ui/Button'
 import Badge from '../components/ui/Badge'
 import SkeletonLoader from '../components/ui/SkeletonLoader'
-import { calculateGPA } from '../utils/gpa'
+import { calculateGPA, calculateCourseGrade } from '../utils/gpa'
 import { useCourses, type Course as DbCourse } from '../hooks/useCourses'
+import { useAssignments } from '../hooks/useAssignments'
 import { useGraduationProgress } from '../hooks/useGraduationProgress'
 import { useStudySessions } from '../hooks/useStudySessions'
 import { useGamification } from '../hooks/useGamification'
@@ -154,11 +155,16 @@ function PriorityBadge({ priority }: { priority: 'high' | 'medium' | 'low' }) {
 // ── Tab 1: Academic Plan ──────────────────────────────────────────────────────
 function AcademicPlanTab() {
   const { courses, loading, addCourse, updateCourse } = useCourses()
+  const { assignments } = useAssignments()
   const { progress } = useGraduationProgress()
   const [showModal, setShowModal] = useState(false)
 
   const completedCourses = courses.filter((c) => c.grade)
-  const gpa = calculateGPA(completedCourses.map(c => ({ grade: c.grade as string, credits: c.credits })))
+  const gpa = calculateGPA(completedCourses.map(c => ({
+    grade: c.grade as string,
+    credits: c.credits,
+    assignments: assignments.filter(a => a.course_id === c.id),
+  })))
 
   const creditsCompleted = progress?.credits_completed ?? completedCourses.reduce((sum, c) => sum + c.credits, 0)
   const totalCreditsRequired = progress?.total_credits_required ?? 120
@@ -231,23 +237,35 @@ function AcademicPlanTab() {
               </tr>
             </thead>
             <tbody>
-              {completedCourses.map((course: DbCourse) => (
-                <tr key={course.id} className="border-b border-gray-100 dark:border-white/5 hover:bg-gray-50 dark:hover:bg-white/5 transition-colors">
-                  <td className="py-3 px-3 font-medium text-gray-900 dark:text-white">{course.name}</td>
-                  <td className="py-3 px-3 text-gray-500 dark:text-gray-400 font-mono text-xs">{course.code}</td>
-                  <td className="py-3 px-3 text-gray-700 dark:text-gray-300 text-center">{course.credits}</td>
-                  <td className="py-3 px-3">
-                    <select
-                      value={course.grade ?? 'A'}
-                      onChange={e => updateGrade(course.id, e.target.value as GradeOption)}
-                      className="px-2 py-1 rounded-lg bg-gray-100 dark:bg-white/10 border border-gray-200 dark:border-white/10 text-gray-900 dark:text-white text-xs focus:outline-none focus:ring-2 focus:ring-violet-500"
-                    >
-                      {GRADE_OPTIONS.map(g => <option key={g} value={g}>{g}</option>)}
-                    </select>
-                  </td>
-                  <td className="py-3 px-3 text-gray-500 dark:text-gray-400">{course.semester}</td>
-                </tr>
-              ))}
+              {completedCourses.map((course: DbCourse) => {
+                const courseAssignments = assignments.filter(a => a.course_id === course.id)
+                const computed = calculateCourseGrade(courseAssignments, course.grade)
+                return (
+                  <tr key={course.id} className="border-b border-gray-100 dark:border-white/5 hover:bg-gray-50 dark:hover:bg-white/5 transition-colors">
+                    <td className="py-3 px-3 font-medium text-gray-900 dark:text-white">{course.name}</td>
+                    <td className="py-3 px-3 text-gray-500 dark:text-gray-400 font-mono text-xs">{course.code}</td>
+                    <td className="py-3 px-3 text-gray-700 dark:text-gray-300 text-center">{course.credits}</td>
+                    <td className="py-3 px-3">
+                      <div className="flex items-center gap-2">
+                        <select
+                          value={course.grade ?? 'A'}
+                          onChange={e => updateGrade(course.id, e.target.value as GradeOption)}
+                          disabled={computed.source === 'assignments'}
+                          className="px-2 py-1 rounded-lg bg-gray-100 dark:bg-white/10 border border-gray-200 dark:border-white/10 text-gray-900 dark:text-white text-xs focus:outline-none focus:ring-2 focus:ring-violet-500 disabled:opacity-60"
+                        >
+                          {GRADE_OPTIONS.map(g => <option key={g} value={g}>{g}</option>)}
+                        </select>
+                        {computed.source === 'assignments' && (
+                          <span className="text-xs font-semibold text-violet-600 dark:text-violet-400">
+                            {computed.letter} ({computed.percentage}%)
+                          </span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="py-3 px-3 text-gray-500 dark:text-gray-400">{course.semester}</td>
+                  </tr>
+                )
+              })}
             </tbody>
           </table>
         </div>

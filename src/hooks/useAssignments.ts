@@ -53,5 +53,13 @@ export function useAssignments() {
     return { error }
   }
 
-  return { assignments, loading, refresh, addAssignment, updateAssignment, deleteAssignment }
+  async function gradeAssignment(id: string, pointsEarned: number, pointsPossible: number) {
+    return updateAssignment(id, {
+      points_earned: pointsEarned,
+      points_possible: pointsPossible,
+      status: 'graded',
+    })
+  }
+
+  return { assignments, loading, refresh, addAssignment, updateAssignment, deleteAssignment, gradeAssignment }
 }
