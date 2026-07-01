@@ -5,6 +5,7 @@ import { useNotes } from '../hooks/useNotes'
 import { useCourses } from '../hooks/useCourses'
 import { useNoteFolders } from '../hooks/useNoteFolders'
 import { useNotePages } from '../hooks/useNotePages'
+import { useNoteAudio } from '../hooks/useNoteAudio'
 import {
   Search,
   Plus,
@@ -27,6 +28,11 @@ import {
   Tag,
   ChevronRight,
   FileText,
+  Mic,
+  Square,
+  Play,
+  Pause,
+  Type,
 } from 'lucide-react'
 
 const AI_MOCK: Record<string, string> = {
@@ -48,6 +54,8 @@ interface Stroke {
   color: string
   size: number
   tool: DrawTool
+  pressures?: number[]
+  pointerType?: string
 }
 
 const DRAW_COLORS = ['#7c3aed', '#0891b2', '#059669', '#dc2626', '#d97706', '#1f2937']
@@ -70,8 +78,6 @@ function drawStrokes(canvas: HTMLCanvasElement, strokeList: Stroke[]) {
   ctx.clearRect(0, 0, canvas.width, canvas.height)
   for (const stroke of strokeList) {
     if (stroke.points.length < 2) continue
-    ctx.beginPath()
-    ctx.lineWidth = stroke.size
     ctx.lineCap = 'round'
     ctx.lineJoin = 'round'
     if (stroke.tool === 'eraser') {
@@ -87,11 +93,21 @@ function drawStrokes(canvas: HTMLCanvasElement, strokeList: Stroke[]) {
       ctx.strokeStyle = stroke.color
       ctx.globalAlpha = 1
     }
-    ctx.moveTo(stroke.points[0].x, stroke.points[0].y)
+
+    // Draw segment-by-segment so we can vary width per pressure point
     for (let i = 1; i < stroke.points.length; i++) {
+      const pressure = stroke.pressures?.[i] ?? null
+      if (pressure !== null) {
+        ctx.lineWidth = stroke.size * (0.5 + pressure * 1.5)
+      } else {
+        ctx.lineWidth = stroke.size
+      }
+      ctx.beginPath()
+      ctx.moveTo(stroke.points[i - 1].x, stroke.points[i - 1].y)
       ctx.lineTo(stroke.points[i].x, stroke.points[i].y)
+      ctx.stroke()
     }
-    ctx.stroke()
+
     ctx.globalAlpha = 1
     ctx.globalCompositeOperation = 'source-over'
   }
@@ -112,6 +128,8 @@ export default function NotesPage() {
   const [aiOutput, setAiOutput] = useState<string | null>(null)
   const [aiLoading, setAiLoading] = useState(false)
   const [showMobileEditor, setShowMobileEditor] = useState(false)
+  const [ocrLoading, setOcrLoading] = useState(false)
+  const [ocrToast, setOcrToast] = useState<string | null>(null)
 
   // Folder management UI
   const [showFolderEditor, setShowFolderEditor] = useState(false)
@@ -138,9 +156,35 @@ export default function NotesPage() {
   const [strokes, setStrokes] = useState<Stroke[]>([])
   const currentStrokeRef = useRef<Stroke | null>(null)
   const isDrawing = useRef(false)
+  // Pointer event tracking for palm rejection
+  const activePointerIdRef = useRef<number | null>(null)
+  const activePointerTypeRef = useRef<string | null>(null)
 
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+
+  // Derive audio key from active note + page so recording is per-page
+  const activeNote = notes.find((n) => n.id === activeNoteId) ?? null
+  const activePage = pages[activePageIndex] ?? null
+  const audioKey = activeNoteId
+    ? `${activeNoteId}__${activePage?.id ?? 'default'}`
+    : '__none__'
+
+  // Audio recording via useNoteAudio
+  const {
+    isRecording,
+    isPlaying,
+    hasRecording,
+    elapsedMs,
+    formatElapsed,
+    checkHasRecording,
+    startRecording,
+    stopRecording,
+    playRecording,
+    pauseRecording,
+    deleteRecording,
+    addMarker,
+  } = useNoteAudio(audioKey)
 
   // Select first note once notes load
   useEffect(() => {
@@ -148,9 +192,6 @@ export default function NotesPage() {
       setActiveNoteId(notes[0].id)
     }
   }, [notes, activeNoteId])
-
-  const activeNote = notes.find((n) => n.id === activeNoteId) ?? null
-  const activePage = pages[activePageIndex] ?? null
 
   // Sync draft buffers when active note changes
   useEffect(() => {
@@ -162,6 +203,13 @@ export default function NotesPage() {
   useEffect(() => {
     setDraftContent(activePage?.content ?? activeNote?.content ?? '')
   }, [activePage?.id, activeNote?.id]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Check for existing recording when note/page changes
+  useEffect(() => {
+    if (activeNoteId) {
+      checkHasRecording()
+    }
+  }, [activeNoteId, activePage?.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const courseNames = courses.map((c) => c.name)
   const COURSES_FILTER = ['All Courses', ...courseNames]
@@ -188,6 +236,11 @@ export default function NotesPage() {
   const handleContentChange = useCallback(
     (value: string) => {
       setDraftContent(value)
+      if (isRecording) {
+        // Add marker at current line count
+        const lineIndex = value.slice(0, value.length).split('\n').length - 1
+        addMarker(lineIndex)
+      }
       setSaveStatus('saving')
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
       saveTimerRef.current = setTimeout(() => {
@@ -200,7 +253,7 @@ export default function NotesPage() {
         setTimeout(() => setSaveStatus('idle'), 2000)
       }, 2000)
     },
-    [activeNoteId, activePage, updateNote, updatePage]
+    [activeNoteId, activePage, updateNote, updatePage, isRecording, addMarker]
   )
 
   const handleTitleChange = useCallback(
@@ -237,54 +290,99 @@ export default function NotesPage() {
     })
   }, [])
 
-  const getCanvasPoint = useCallback(
-    (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
+  // ── Pointer Events canvas handlers (Pointer Events API with palm rejection) ──
+  const getCanvasPointFromPointer = useCallback(
+    (e: React.PointerEvent<HTMLCanvasElement>) => {
       const canvas = canvasRef.current!
       const rect = canvas.getBoundingClientRect()
       const scaleX = canvas.width / rect.width
       const scaleY = canvas.height / rect.height
-      if ('touches' in e) {
-        const touch = e.touches[0]
-        return { x: (touch.clientX - rect.left) * scaleX, y: (touch.clientY - rect.top) * scaleY }
-      }
       return { x: (e.clientX - rect.left) * scaleX, y: (e.clientY - rect.top) * scaleY }
     },
     []
   )
 
-  const handleCanvasStart = useCallback(
-    (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
+  const handlePointerDown = useCallback(
+    (e: React.PointerEvent<HTMLCanvasElement>) => {
+      // Palm rejection: if a pen is active, ignore touch pointers
+      if (activePointerTypeRef.current === 'pen' && e.pointerType === 'touch') return
+
       e.preventDefault()
+      ;(e.target as HTMLCanvasElement).setPointerCapture(e.pointerId)
+
+      activePointerIdRef.current = e.pointerId
+      activePointerTypeRef.current = e.pointerType
       isDrawing.current = true
-      const pt = getCanvasPoint(e)
-      currentStrokeRef.current = { points: [pt], color: drawColor, size: drawSize, tool: drawTool }
+
+      const pt = getCanvasPointFromPointer(e)
+      const isPen = e.pointerType === 'pen'
+      const pressure = isPen ? e.pressure : undefined
+
+      currentStrokeRef.current = {
+        points: [pt],
+        color: drawColor,
+        size: drawSize,
+        tool: drawTool,
+        pointerType: e.pointerType,
+        pressures: isPen ? [pressure ?? 0.5] : undefined,
+      }
     },
-    [drawColor, drawSize, drawTool, getCanvasPoint]
+    [drawColor, drawSize, drawTool, getCanvasPointFromPointer]
   )
 
-  const handleCanvasMove = useCallback(
-    (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
-      e.preventDefault()
+  const handlePointerMove = useCallback(
+    (e: React.PointerEvent<HTMLCanvasElement>) => {
+      // Only handle the active pointer
+      if (e.pointerId !== activePointerIdRef.current) return
       if (!isDrawing.current || !currentStrokeRef.current) return
-      const pt = getCanvasPoint(e)
-      currentStrokeRef.current = {
+
+      e.preventDefault()
+      const pt = getCanvasPointFromPointer(e)
+      const isPen = e.pointerType === 'pen'
+      const pressure = isPen ? e.pressure : undefined
+
+      const updatedStroke: Stroke = {
         ...currentStrokeRef.current,
         points: [...currentStrokeRef.current.points, pt],
+        pressures: isPen
+          ? [...(currentStrokeRef.current.pressures ?? []), pressure ?? 0.5]
+          : currentStrokeRef.current.pressures,
       }
+      currentStrokeRef.current = updatedStroke
+
       if (canvasRef.current) {
         drawStrokes(canvasRef.current, [...strokes, currentStrokeRef.current])
       }
     },
-    [getCanvasPoint, strokes]
+    [getCanvasPointFromPointer, strokes]
   )
 
-  const handleCanvasEnd = useCallback(() => {
-    if (!isDrawing.current || !currentStrokeRef.current) return
-    isDrawing.current = false
-    const finished = currentStrokeRef.current
-    currentStrokeRef.current = null
-    setStrokes((prev) => [...prev, finished])
-  }, [])
+  const handlePointerUp = useCallback(
+    (e: React.PointerEvent<HTMLCanvasElement>) => {
+      if (e.pointerId !== activePointerIdRef.current) return
+      if (!isDrawing.current || !currentStrokeRef.current) return
+
+      isDrawing.current = false
+      activePointerIdRef.current = null
+      activePointerTypeRef.current = null
+
+      const finished = currentStrokeRef.current
+      currentStrokeRef.current = null
+      setStrokes((prev) => [...prev, finished])
+    },
+    []
+  )
+
+  const handlePointerCancel = useCallback(
+    (e: React.PointerEvent<HTMLCanvasElement>) => {
+      if (e.pointerId !== activePointerIdRef.current) return
+      isDrawing.current = false
+      activePointerIdRef.current = null
+      activePointerTypeRef.current = null
+      currentStrokeRef.current = null
+    },
+    []
+  )
 
   const handleUndo = useCallback(() => {
     setStrokes((prev) => {
@@ -301,6 +399,40 @@ export default function NotesPage() {
     const ctx = canvas.getContext('2d')
     ctx?.clearRect(0, 0, canvas.width, canvas.height)
   }, [])
+
+  const handleConvertToText = useCallback(async () => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+    setOcrLoading(true)
+    try {
+      const { createWorker } = await import('tesseract.js')
+      const worker = await createWorker('eng')
+      const { data } = await worker.recognize(canvas)
+      await worker.terminate()
+
+      const text = data.text.trim()
+      const confidence = data.confidence
+
+      if (!text || confidence < 30) {
+        setOcrToast('Nothing recognized — try writing more clearly')
+        setTimeout(() => setOcrToast(null), 3000)
+      } else {
+        const appended = draftContent + '\n\n---\n*[Handwriting recognized]*\n' + text
+        setDraftContent(appended)
+        if (activePage) {
+          updatePage(activePage.id, { content: appended })
+        } else if (activeNoteId) {
+          updateNote(activeNoteId, { content: appended })
+        }
+        setEditorMode('write')
+      }
+    } catch {
+      setOcrToast('OCR failed — please try again')
+      setTimeout(() => setOcrToast(null), 3000)
+    } finally {
+      setOcrLoading(false)
+    }
+  }, [draftContent, activePage, activeNoteId, updatePage, updateNote])
 
   const handleAiAction = async (action: string) => {
     setAiLoading(true)
@@ -805,6 +937,114 @@ export default function NotesPage() {
               </div>
             )}
 
+            {/* Audio toolbar (Write mode only) */}
+            {editorMode === 'write' && (
+              <div className="flex items-center gap-2 px-4 py-2 border-b border-gray-200 dark:border-white/10 flex-shrink-0 bg-gray-50/50 dark:bg-white/[0.02]">
+                {/* Record / Stop button */}
+                {!isRecording ? (
+                  <button
+                    onClick={startRecording}
+                    title="Start recording"
+                    className="flex items-center gap-1.5 px-2 py-1 rounded-md text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors text-xs font-medium"
+                  >
+                    <Mic size={15} />
+                    Record
+                  </button>
+                ) : (
+                  <button
+                    onClick={stopRecording}
+                    title="Stop recording"
+                    className="flex items-center gap-1.5 px-2 py-1 rounded-md text-red-600 bg-red-50 dark:bg-red-900/20 hover:bg-red-100 dark:hover:bg-red-900/30 transition-colors text-xs font-medium"
+                  >
+                    <Square size={15} />
+                    Stop
+                  </button>
+                )}
+
+                {/* Recording indicator */}
+                {isRecording && (
+                  <div className="flex items-center gap-2">
+                    {/* Pulsing red dot */}
+                    <span className="relative flex h-2.5 w-2.5">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75" />
+                      <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-red-500" />
+                    </span>
+                    {/* Elapsed timer */}
+                    <span className="text-xs font-mono text-red-600 dark:text-red-400 min-w-[56px]">
+                      {formatElapsed(elapsedMs)}
+                    </span>
+                    {/* CSS waveform animation */}
+                    <div className="flex items-end gap-px h-4" aria-hidden>
+                      {[0, 1, 2, 3, 4].map((i) => (
+                        <span
+                          key={i}
+                          className="w-1 rounded-full bg-red-500"
+                          style={{
+                            animation: `audioBar 0.8s ease-in-out ${i * 0.12}s infinite alternate`,
+                            height: '40%',
+                          }}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Playback controls (when recording saved) */}
+                {hasRecording && !isRecording && (
+                  <div className="flex items-center gap-1 ml-1">
+                    <button
+                      onClick={isPlaying ? pauseRecording : playRecording}
+                      title={isPlaying ? 'Pause' : 'Play'}
+                      className="flex items-center gap-1 px-2 py-1 rounded-md text-violet-600 hover:bg-violet-50 dark:hover:bg-violet-900/20 transition-colors text-xs"
+                    >
+                      {isPlaying ? <Pause size={14} /> : <Play size={14} />}
+                      {isPlaying ? 'Pause' : 'Play'}
+                    </button>
+
+                    {/* Waveform animation during playback */}
+                    {isPlaying && (
+                      <div className="flex items-end gap-px h-4 ml-1" aria-hidden>
+                        {[0, 1, 2, 3, 4].map((i) => (
+                          <span
+                            key={i}
+                            className="w-1 rounded-full bg-violet-500"
+                            style={{
+                              animation: `audioBar 0.7s ease-in-out ${i * 0.1}s infinite alternate`,
+                              height: '40%',
+                            }}
+                          />
+                        ))}
+                      </div>
+                    )}
+
+                    <button
+                      onClick={deleteRecording}
+                      title="Delete recording"
+                      className="p-1 rounded-md text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                )}
+
+                <style>{`
+                  @keyframes audioBar {
+                    from { height: 20%; }
+                    to { height: 90%; }
+                  }
+                `}</style>
+              </div>
+            )}
+
+            {/* Recording available chip */}
+            {hasRecording && editorMode === 'write' && (
+              <div className="px-4 py-1 flex-shrink-0">
+                <span className="inline-flex items-center gap-1 text-[11px] text-violet-600 dark:text-violet-400 bg-violet-50 dark:bg-violet-900/20 px-2 py-0.5 rounded-full">
+                  🎙️ Recording available
+                </span>
+              </div>
+            )}
+
             {/* Draw mode toolbar */}
             {editorMode === 'draw' && (
               <div className="flex flex-wrap items-center gap-3 px-4 py-2 border-b border-gray-200 dark:border-white/10 flex-shrink-0">
@@ -871,7 +1111,7 @@ export default function NotesPage() {
                   ))}
                 </div>
 
-                {/* Undo / Clear */}
+                {/* Undo / Clear / Convert to Text */}
                 <div className="flex items-center gap-1 ml-auto">
                   <button
                     onClick={handleUndo}
@@ -888,12 +1128,32 @@ export default function NotesPage() {
                   >
                     <Trash2 size={16} />
                   </button>
+                  <button
+                    onClick={handleConvertToText}
+                    disabled={ocrLoading || strokes.length === 0}
+                    className="flex items-center gap-1 px-2 py-1.5 rounded-md text-sm text-violet-600 dark:text-violet-400 hover:bg-violet-50 dark:hover:bg-violet-900/20 disabled:opacity-40 transition-colors"
+                    title="Convert handwriting to text"
+                  >
+                    {ocrLoading ? (
+                      <Loader2 size={16} className="animate-spin" />
+                    ) : (
+                      <Type size={16} />
+                    )}
+                    <span className="text-xs hidden sm:inline">Convert to Text</span>
+                  </button>
                 </div>
               </div>
             )}
 
             {/* Editor content */}
-            <div className="flex-1 overflow-y-auto p-4">
+            <div className="flex-1 overflow-y-auto p-4 relative">
+              {/* OCR Toast */}
+              {ocrToast && (
+                <div className="absolute top-4 left-1/2 -translate-x-1/2 z-10 px-4 py-2 bg-gray-800 dark:bg-gray-700 text-white text-sm rounded-lg shadow-lg">
+                  {ocrToast}
+                </div>
+              )}
+
               {editorMode === 'write' && (
                 <textarea
                   ref={textareaRef}
@@ -910,13 +1170,10 @@ export default function NotesPage() {
                   ref={canvasRef}
                   width={800}
                   height={400}
-                  onMouseDown={handleCanvasStart}
-                  onMouseMove={handleCanvasMove}
-                  onMouseUp={handleCanvasEnd}
-                  onMouseLeave={handleCanvasEnd}
-                  onTouchStart={handleCanvasStart}
-                  onTouchMove={handleCanvasMove}
-                  onTouchEnd={handleCanvasEnd}
+                  onPointerDown={handlePointerDown}
+                  onPointerMove={handlePointerMove}
+                  onPointerUp={handlePointerUp}
+                  onPointerCancel={handlePointerCancel}
                   className="border border-gray-200 dark:border-white/10 rounded-xl bg-white dark:bg-gray-950 cursor-crosshair w-full"
                   style={{ height: '400px', touchAction: 'none' }}
                 />
