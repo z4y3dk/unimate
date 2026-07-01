@@ -1,81 +1,24 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { Plus, RefreshCw, Lock, CheckCircle2 } from 'lucide-react'
 import Card from '../components/ui/Card'
 import Button from '../components/ui/Button'
 import Badge from '../components/ui/Badge'
 import SkeletonLoader from '../components/ui/SkeletonLoader'
-import { calculateGPA } from '../utils/gpa'
+import { calculateGPA, calculateCourseGrade } from '../utils/gpa'
+import { useCourses, type Course as DbCourse } from '../hooks/useCourses'
+import { useAssignments } from '../hooks/useAssignments'
+import { useGraduationProgress } from '../hooks/useGraduationProgress'
+import { useStudySessions } from '../hooks/useStudySessions'
+import { useGamification } from '../hooks/useGamification'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 type GradeOption = 'A' | 'B+' | 'B' | 'C+' | 'C' | 'D' | 'F'
-
-interface Course {
-  id: number
-  name: string
-  code: string
-  credits: number
-  grade: GradeOption
-  semester: string
-}
-
-interface StudySession {
-  course: string
-  topic: string
-  duration: number
-  priority: 'high' | 'medium' | 'low'
-  done: boolean
-}
-
-interface StudyDay {
-  day: string
-  sessions: StudySession[]
-}
-
-// ── Mock Data ─────────────────────────────────────────────────────────────────
-const INITIAL_COURSES: Course[] = [
-  { id: 1, name: 'Intro to Programming', code: 'CS101', credits: 3, grade: 'A', semester: 'Sem 1' },
-  { id: 2, name: 'Mathematics I', code: 'MATH101', credits: 3, grade: 'B+', semester: 'Sem 1' },
-  { id: 3, name: 'English Communication', code: 'ENG101', credits: 3, grade: 'A', semester: 'Sem 1' },
-  { id: 4, name: 'Data Structures', code: 'CS201', credits: 3, grade: 'B+', semester: 'Sem 2' },
-  { id: 5, name: 'Web Development', code: 'CS305', credits: 3, grade: 'A', semester: 'Sem 2' },
-]
-
-const INITIAL_STUDY_PLAN: StudyDay[] = [
-  {
-    day: 'Monday', sessions: [
-      { course: 'Big Data Analytics', topic: 'MapReduce Deep Dive', duration: 60, priority: 'high', done: false },
-      { course: 'Database Systems', topic: 'SQL Joins Practice', duration: 45, priority: 'medium', done: false },
-    ],
-  },
-  {
-    day: 'Tuesday', sessions: [
-      { course: 'Applied Statistics', topic: 'Hypothesis Testing', duration: 90, priority: 'high', done: false },
-      { course: 'Cybersecurity', topic: 'Encryption Basics', duration: 45, priority: 'low', done: false },
-    ],
-  },
-  {
-    day: 'Wednesday', sessions: [
-      { course: 'Big Data Analytics', topic: 'Hadoop Ecosystem', duration: 60, priority: 'high', done: false },
-    ],
-  },
-  {
-    day: 'Thursday', sessions: [
-      { course: 'Database Systems', topic: 'Normalization', duration: 60, priority: 'medium', done: false },
-      { course: 'Applied Statistics', topic: 'Regression Analysis', duration: 60, priority: 'medium', done: false },
-    ],
-  },
-  {
-    day: 'Friday', sessions: [
-      { course: 'Cybersecurity', topic: 'Network Security Review', duration: 90, priority: 'low', done: false },
-    ],
-  },
-]
 
 const GRADE_OPTIONS: GradeOption[] = ['A', 'B+', 'B', 'C+', 'C', 'D', 'F']
 
 // ── Graduation Ring ───────────────────────────────────────────────────────────
 function GraduationRing({ completed, required, gpa }: { completed: number; required: number; gpa: number }) {
-  const pct = Math.round((completed / required) * 100)
+  const pct = required > 0 ? Math.round((completed / required) * 100) : 0
   const r = 52
   const circ = 2 * Math.PI * r
   const dash = (pct / 100) * circ
@@ -118,7 +61,7 @@ function GraduationRing({ completed, required, gpa }: { completed: number; requi
 // ── Add Course Modal ──────────────────────────────────────────────────────────
 interface AddCourseModalProps {
   onClose: () => void
-  onAdd: (course: Omit<Course, 'id'>) => void
+  onAdd: (course: { name: string; code: string; credits: number; grade: GradeOption; semester: string }) => void
 }
 
 function AddCourseModal({ onClose, onAdd }: AddCourseModalProps) {
@@ -136,8 +79,8 @@ function AddCourseModal({ onClose, onAdd }: AddCourseModalProps) {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-      <Card className="w-full max-w-md p-6">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/60 backdrop-blur-sm">
+      <Card className="w-full max-w-md max-h-[90vh] overflow-y-auto p-4 sm:p-6">
         <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Add Past Course</h2>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
@@ -209,37 +152,41 @@ function PriorityBadge({ priority }: { priority: 'high' | 'medium' | 'low' }) {
   return <Badge variant="default">Low</Badge>
 }
 
-// ── Achievement Badge Data ────────────────────────────────────────────────────
-interface AchievBadge {
-  icon: string
-  name: string
-  desc: string
-  earned: boolean
-  color: string
-}
-
-const BADGES: AchievBadge[] = [
-  { icon: '📝', name: 'First Note', desc: 'Created your first note', earned: true, color: 'from-violet-500 to-purple-600' },
-  { icon: '🔥', name: 'Week Warrior', desc: '7-day study streak', earned: true, color: 'from-orange-500 to-red-500' },
-  { icon: '🧠', name: 'Quiz Master', desc: 'Completed 10 quizzes', earned: true, color: 'from-blue-500 to-cyan-500' },
-  { icon: '🤖', name: 'AI Explorer', desc: 'First AI chat session', earned: true, color: 'from-emerald-500 to-teal-500' },
-  { icon: '⏰', name: 'Deadline Crusher', desc: 'Submit 5 assignments on time', earned: false, color: 'from-gray-400 to-gray-500' },
-  { icon: '🔥', name: 'Study Streak 30', desc: '30-day study streak', earned: false, color: 'from-gray-400 to-gray-500' },
-]
-
 // ── Tab 1: Academic Plan ──────────────────────────────────────────────────────
 function AcademicPlanTab() {
-  const [courses, setCourses] = useState<Course[]>(INITIAL_COURSES)
+  const { courses, loading, addCourse, updateCourse } = useCourses()
+  const { assignments } = useAssignments()
+  const { progress } = useGraduationProgress()
   const [showModal, setShowModal] = useState(false)
 
-  const gpa = calculateGPA(courses.map(c => ({ grade: c.grade, credits: c.credits })))
+  const completedCourses = courses.filter((c) => c.grade)
+  const gpa = calculateGPA(completedCourses.map(c => ({
+    grade: c.grade as string,
+    credits: c.credits,
+    assignments: assignments.filter(a => a.course_id === c.id),
+  })))
 
-  function updateGrade(id: number, grade: GradeOption) {
-    setCourses(prev => prev.map(c => c.id === id ? { ...c, grade } : c))
+  const creditsCompleted = progress?.credits_completed ?? completedCourses.reduce((sum, c) => sum + c.credits, 0)
+  const totalCreditsRequired = progress?.total_credits_required ?? 120
+  const expectedGraduation = progress?.expected_graduation ?? 'TBD'
+
+  function updateGrade(id: string, grade: GradeOption) {
+    updateCourse(id, { grade })
   }
 
-  function addCourse(course: Omit<Course, 'id'>) {
-    setCourses(prev => [...prev, { ...course, id: Date.now() }])
+  function addCourseRow(course: { name: string; code: string; credits: number; grade: GradeOption; semester: string }) {
+    addCourse({
+      name: course.name,
+      code: course.code,
+      credits: course.credits,
+      grade: course.grade,
+      semester: course.semester,
+      status: 'completed',
+    })
+  }
+
+  if (loading) {
+    return <SkeletonLoader className="h-64 rounded-2xl" />
   }
 
   return (
@@ -250,7 +197,7 @@ function AcademicPlanTab() {
           🎓 Graduation Progress
         </h2>
         <div className="flex flex-col md:flex-row items-center gap-8">
-          <GraduationRing completed={45} required={120} gpa={gpa} />
+          <GraduationRing completed={creditsCompleted} required={totalCreditsRequired} gpa={gpa} />
           <div className="flex-1 space-y-4">
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <div className="p-4 rounded-xl bg-gray-50 dark:bg-white/5 text-center">
@@ -258,7 +205,7 @@ function AcademicPlanTab() {
                 <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Current GPA</p>
               </div>
               <div className="p-4 rounded-xl bg-gray-50 dark:bg-white/5 text-center">
-                <p className="text-2xl font-bold text-gray-900 dark:text-white">May 2027</p>
+                <p className="text-2xl font-bold text-gray-900 dark:text-white">{expectedGraduation}</p>
                 <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Expected Graduation</p>
               </div>
               <div className="p-4 rounded-xl bg-gray-50 dark:bg-white/5 text-center flex flex-col items-center justify-center gap-1">
@@ -290,23 +237,35 @@ function AcademicPlanTab() {
               </tr>
             </thead>
             <tbody>
-              {courses.map(course => (
-                <tr key={course.id} className="border-b border-gray-100 dark:border-white/5 hover:bg-gray-50 dark:hover:bg-white/5 transition-colors">
-                  <td className="py-3 px-3 font-medium text-gray-900 dark:text-white">{course.name}</td>
-                  <td className="py-3 px-3 text-gray-500 dark:text-gray-400 font-mono text-xs">{course.code}</td>
-                  <td className="py-3 px-3 text-gray-700 dark:text-gray-300 text-center">{course.credits}</td>
-                  <td className="py-3 px-3">
-                    <select
-                      value={course.grade}
-                      onChange={e => updateGrade(course.id, e.target.value as GradeOption)}
-                      className="px-2 py-1 rounded-lg bg-gray-100 dark:bg-white/10 border border-gray-200 dark:border-white/10 text-gray-900 dark:text-white text-xs focus:outline-none focus:ring-2 focus:ring-violet-500"
-                    >
-                      {GRADE_OPTIONS.map(g => <option key={g} value={g}>{g}</option>)}
-                    </select>
-                  </td>
-                  <td className="py-3 px-3 text-gray-500 dark:text-gray-400">{course.semester}</td>
-                </tr>
-              ))}
+              {completedCourses.map((course: DbCourse) => {
+                const courseAssignments = assignments.filter(a => a.course_id === course.id)
+                const computed = calculateCourseGrade(courseAssignments, course.grade)
+                return (
+                  <tr key={course.id} className="border-b border-gray-100 dark:border-white/5 hover:bg-gray-50 dark:hover:bg-white/5 transition-colors">
+                    <td className="py-3 px-3 font-medium text-gray-900 dark:text-white">{course.name}</td>
+                    <td className="py-3 px-3 text-gray-500 dark:text-gray-400 font-mono text-xs">{course.code}</td>
+                    <td className="py-3 px-3 text-gray-700 dark:text-gray-300 text-center">{course.credits}</td>
+                    <td className="py-3 px-3">
+                      <div className="flex items-center gap-2">
+                        <select
+                          value={course.grade ?? 'A'}
+                          onChange={e => updateGrade(course.id, e.target.value as GradeOption)}
+                          disabled={computed.source === 'assignments'}
+                          className="px-2 py-1 rounded-lg bg-gray-100 dark:bg-white/10 border border-gray-200 dark:border-white/10 text-gray-900 dark:text-white text-xs focus:outline-none focus:ring-2 focus:ring-violet-500 disabled:opacity-60"
+                        >
+                          {GRADE_OPTIONS.map(g => <option key={g} value={g}>{g}</option>)}
+                        </select>
+                        {computed.source === 'assignments' && (
+                          <span className="text-xs font-semibold text-violet-600 dark:text-violet-400">
+                            {computed.letter} ({computed.percentage}%)
+                          </span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="py-3 px-3 text-gray-500 dark:text-gray-400">{course.semester}</td>
+                  </tr>
+                )
+              })}
             </tbody>
           </table>
         </div>
@@ -315,30 +274,39 @@ function AcademicPlanTab() {
         </p>
       </Card>
 
-      {showModal && <AddCourseModal onClose={() => setShowModal(false)} onAdd={addCourse} />}
+      {showModal && <AddCourseModal onClose={() => setShowModal(false)} onAdd={addCourseRow} />}
     </div>
   )
 }
 
 // ── Tab 2: Study Schedule ─────────────────────────────────────────────────────
 function StudyScheduleTab() {
-  const [plan, setPlan] = useState<StudyDay[]>(INITIAL_STUDY_PLAN)
+  const { sessions, loading, toggleDone, regenerate } = useStudySessions()
   const [regenerating, setRegenerating] = useState(false)
 
-  function toggleDone(dayIdx: number, sessionIdx: number) {
-    setPlan(prev => prev.map((d, di) =>
-      di === dayIdx
-        ? { ...d, sessions: d.sessions.map((s, si) => si === sessionIdx ? { ...s, done: !s.done } : s) }
-        : d
-    ))
+  const days = Array.from(new Set(sessions.map((s) => s.day_of_week)))
+
+  async function handleRegenerate() {
+    setRegenerating(true)
+    // Re-create sessions fresh (resetting done state) using the same data
+    const fresh = sessions.map((s) => ({
+      day_of_week: s.day_of_week,
+      course_name: s.course_name,
+      topic: s.topic,
+      duration_minutes: s.duration_minutes,
+      priority: s.priority,
+      done: false,
+    }))
+    await regenerate(fresh)
+    setRegenerating(false)
   }
 
-  function regenerate() {
-    setRegenerating(true)
-    setTimeout(() => {
-      setPlan(INITIAL_STUDY_PLAN.map(d => ({ ...d, sessions: d.sessions.map(s => ({ ...s, done: false })) })))
-      setRegenerating(false)
-    }, 1500)
+  if (loading) {
+    return (
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+        {[1, 2, 3].map(i => <SkeletonLoader key={i} className="h-48 rounded-2xl" />)}
+      </div>
+    )
   }
 
   return (
@@ -348,23 +316,23 @@ function StudyScheduleTab() {
           <h2 className="text-lg font-semibold text-gray-900 dark:text-white">AI Study Plan</h2>
           <p className="text-sm text-gray-500 dark:text-gray-400">Personalized for your current courses and weak spots</p>
         </div>
-        <Button variant="secondary" onClick={regenerate} disabled={regenerating}>
+        <Button variant="secondary" onClick={handleRegenerate} disabled={regenerating}>
           <RefreshCw className={`w-4 h-4 mr-2 ${regenerating ? 'animate-spin' : ''}`} />
           {regenerating ? 'Regenerating…' : 'Regenerate Plan'}
         </Button>
       </div>
 
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-        {plan.map((day, dayIdx) => (
-          <Card key={day.day} className="p-5">
+        {days.map((day) => (
+          <Card key={day} className="p-5">
             <h3 className="font-semibold text-gray-900 dark:text-white mb-3 flex items-center gap-2">
               <span className="w-2 h-2 rounded-full bg-gradient-to-r from-violet-500 to-cyan-500 inline-block" />
-              {day.day}
+              {day}
             </h3>
             <div className="space-y-3">
-              {day.sessions.map((session, sessionIdx) => (
+              {sessions.filter((s) => s.day_of_week === day).map((session) => (
                 <div
-                  key={sessionIdx}
+                  key={session.id}
                   className={`p-3 rounded-xl border transition-all ${session.done
                     ? 'bg-green-50 dark:bg-green-900/10 border-green-200 dark:border-green-700/30 opacity-60'
                     : 'bg-gray-50 dark:bg-white/5 border-gray-200 dark:border-white/10'
@@ -372,7 +340,7 @@ function StudyScheduleTab() {
                 >
                   <div className="flex items-start gap-3">
                     <button
-                      onClick={() => toggleDone(dayIdx, sessionIdx)}
+                      onClick={() => toggleDone(session.id, !session.done)}
                       className={`mt-0.5 w-5 h-5 rounded-full border-2 flex-shrink-0 flex items-center justify-center transition-colors ${session.done
                         ? 'bg-green-500 border-green-500'
                         : 'border-gray-300 dark:border-white/30 hover:border-violet-400'
@@ -384,9 +352,9 @@ function StudyScheduleTab() {
                       <p className={`text-sm font-medium ${session.done ? 'line-through text-gray-400' : 'text-gray-900 dark:text-white'}`}>
                         {session.topic}
                       </p>
-                      <p className="text-xs text-gray-500 dark:text-gray-400">{session.course}</p>
+                      <p className="text-xs text-gray-500 dark:text-gray-400">{session.course_name}</p>
                       <div className="flex items-center gap-2 mt-2">
-                        <span className="text-xs text-gray-500 dark:text-gray-400">{session.duration} min</span>
+                        <span className="text-xs text-gray-500 dark:text-gray-400">{session.duration_minutes} min</span>
                         <PriorityBadge priority={session.priority} />
                       </div>
                     </div>
@@ -403,23 +371,46 @@ function StudyScheduleTab() {
 
 // ── Tab 3: Achievements ───────────────────────────────────────────────────────
 function AchievementsTab() {
-  const currentXP = 1840
-  const levelThreshold = 1500
-  const nextLevelThreshold = 2000
+  const { gamification, loading } = useGamification()
+
+  if (loading || !gamification) {
+    return (
+      <div className="space-y-6">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          {[1, 2, 3, 4].map(i => <SkeletonLoader key={i} className="h-32 rounded-2xl" />)}
+        </div>
+        <SkeletonLoader className="h-32 rounded-2xl" />
+      </div>
+    )
+  }
+
+  const currentXP = gamification.total_xp
+  const level = gamification.level
+  const levelThreshold = (level - 1) * 250
+  const nextLevelThreshold = level * 250
   const xpInLevel = currentXP - levelThreshold
   const xpNeeded = nextLevelThreshold - levelThreshold
   const xpToNext = nextLevelThreshold - currentXP
-  const progress = (xpInLevel / xpNeeded) * 100
+  const progress = xpNeeded > 0 ? (xpInLevel / xpNeeded) * 100 : 0
+
+  const BADGES = [
+    { icon: '📝', name: 'First Note', desc: 'Created your first note', earned: currentXP > 0, color: 'from-violet-500 to-purple-600' },
+    { icon: '🔥', name: 'Week Warrior', desc: '7-day study streak', earned: gamification.current_streak >= 7, color: 'from-orange-500 to-red-500' },
+    { icon: '🧠', name: 'Quiz Master', desc: 'Completed 10 quizzes', earned: currentXP >= 500, color: 'from-blue-500 to-cyan-500' },
+    { icon: '🤖', name: 'AI Explorer', desc: 'First AI chat session', earned: currentXP > 0, color: 'from-emerald-500 to-teal-500' },
+    { icon: '⏰', name: 'Deadline Crusher', desc: 'Submit 5 assignments on time', earned: false, color: 'from-gray-400 to-gray-500' },
+    { icon: '🔥', name: 'Study Streak 30', desc: '30-day study streak', earned: gamification.current_streak >= 30, color: 'from-gray-400 to-gray-500' },
+  ]
 
   return (
     <div className="space-y-6">
       {/* Big stat cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         {[
-          { icon: '🔥', label: 'Streak', value: '12 days', color: 'from-orange-500/20 to-red-500/20 border-orange-500/30' },
-          { icon: '⚡', label: 'Total XP', value: '1,840', color: 'from-yellow-500/20 to-amber-500/20 border-yellow-500/30' },
-          { icon: '🏆', label: 'Level', value: '7', color: 'from-violet-500/20 to-purple-500/20 border-violet-500/30' },
-          { icon: '🏅', label: 'Longest Streak', value: '21 days', color: 'from-blue-500/20 to-cyan-500/20 border-blue-500/30' },
+          { icon: '🔥', label: 'Streak', value: `${gamification.current_streak} days`, color: 'from-orange-500/20 to-red-500/20 border-orange-500/30' },
+          { icon: '⚡', label: 'Total XP', value: currentXP.toLocaleString(), color: 'from-yellow-500/20 to-amber-500/20 border-yellow-500/30' },
+          { icon: '🏆', label: 'Level', value: String(level), color: 'from-violet-500/20 to-purple-500/20 border-violet-500/30' },
+          { icon: '🏅', label: 'Longest Streak', value: `${gamification.longest_streak} days`, color: 'from-blue-500/20 to-cyan-500/20 border-blue-500/30' },
         ].map(stat => (
           <Card key={stat.label} className={`p-5 bg-gradient-to-br ${stat.color} border text-center`}>
             <div className="text-3xl mb-2">{stat.icon}</div>
@@ -433,8 +424,8 @@ function AchievementsTab() {
       <Card className="p-6">
         <div className="flex items-center justify-between mb-3">
           <div>
-            <h3 className="font-semibold text-gray-900 dark:text-white">Level 7 → Level 8</h3>
-            <p className="text-sm text-gray-500 dark:text-gray-400">{xpToNext} XP to Level 8</p>
+            <h3 className="font-semibold text-gray-900 dark:text-white">Level {level} → Level {level + 1}</h3>
+            <p className="text-sm text-gray-500 dark:text-gray-400">{xpToNext} XP to Level {level + 1}</p>
           </div>
           <div className="text-right">
             <p className="text-sm font-medium text-violet-600 dark:text-violet-400">{currentXP.toLocaleString()} XP</p>
@@ -448,8 +439,8 @@ function AchievementsTab() {
           />
         </div>
         <div className="flex justify-between mt-1.5 text-xs text-gray-400">
-          <span>1,500 XP</span>
-          <span>2,000 XP</span>
+          <span>{levelThreshold.toLocaleString()} XP</span>
+          <span>{nextLevelThreshold.toLocaleString()} XP</span>
         </div>
       </Card>
 
@@ -496,29 +487,7 @@ function AchievementsTab() {
 type Tab = 'academic' | 'schedule' | 'achievements'
 
 export default function PlannerPage() {
-  const [loading, setLoading] = useState(true)
   const [activeTab, setActiveTab] = useState<Tab>('academic')
-
-  useEffect(() => {
-    const timer = setTimeout(() => setLoading(false), 800)
-    return () => clearTimeout(timer)
-  }, [])
-
-  if (loading) {
-    return (
-      <div className="p-6 max-w-7xl mx-auto space-y-6">
-        <SkeletonLoader className="h-10 w-64 rounded-xl" />
-        <div className="flex gap-2">
-          {[1, 2, 3].map(i => <SkeletonLoader key={i} className="h-9 w-36 rounded-xl" />)}
-        </div>
-        <SkeletonLoader className="h-64 rounded-2xl" />
-        <div className="grid md:grid-cols-2 gap-4">
-          <SkeletonLoader className="h-48 rounded-2xl" />
-          <SkeletonLoader className="h-48 rounded-2xl" />
-        </div>
-      </div>
-    )
-  }
 
   const TABS: { key: Tab; label: string }[] = [
     { key: 'academic', label: 'Academic Plan' },
@@ -527,7 +496,7 @@ export default function PlannerPage() {
   ]
 
   return (
-    <div className="p-6 max-w-7xl mx-auto space-y-6">
+    <div className="p-4 sm:p-6 max-w-7xl mx-auto space-y-6">
       {/* Header */}
       <div>
         <h1 className="font-playfair text-3xl font-bold text-gray-900 dark:text-white">Planner</h1>

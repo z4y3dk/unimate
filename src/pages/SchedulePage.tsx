@@ -1,20 +1,30 @@
-import { useEffect, useState } from 'react'
-import { Plus, MapPin, Clock } from 'lucide-react'
+import { useState } from 'react'
+import { Plus, MapPin, Clock, Download } from 'lucide-react'
 import Button from '../components/ui/Button'
 import Modal from '../components/ui/Modal'
 import SkeletonLoader from '../components/ui/SkeletonLoader'
+import { useSchedule, type ClassEntry } from '../hooks/useSchedule'
+import { useCourses } from '../hooks/useCourses'
+import { downloadICS, nextDateForDayOfWeek, type ICSEvent } from '../utils/ics'
 
-// ── Types ─────────────────────────────────────────────────────────────────────
-interface ClassEntry {
-  id: number
-  course: string
-  code: string
-  room: string
-  instructor: string
-  color: string
-  days: number[]   // 0=Sun … 6=Sat
-  startTime: string // "HH:MM"
-  endTime: string
+// ── Calendar export ───────────────────────────────────────────────────────────
+function exportScheduleToICS(classes: ClassEntry[]) {
+  const events: ICSEvent[] = classes.map(c => {
+    const start = nextDateForDayOfWeek(c.day_of_week, c.start_time)
+    const [endH, endM] = c.end_time.split(':').map(Number)
+    const end = new Date(start)
+    end.setHours(endH, endM, 0, 0)
+    return {
+      uid: `class-${c.id}@unimate`,
+      summary: c.course_name,
+      location: c.room,
+      description: `${c.course_name} — recurring weekly class`,
+      start,
+      end,
+      recurWeekly: true,
+    }
+  })
+  downloadICS(events, 'unimate-schedule.ics', 'UniMate Schedule')
 }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -34,19 +44,11 @@ const COLOR_OPTIONS = [
   { value: '#db2777', label: 'Pink' },
 ]
 
-const COURSES_LIST = [
-  { name: 'Big Data Analytics', code: 'IS401', color: '#7c3aed' },
-  { name: 'Database Systems', code: 'IS312', color: '#0891b2' },
-  { name: 'Applied Statistics', code: 'MATH301', color: '#059669' },
-  { name: 'Cybersecurity Fundamentals', code: 'IS320', color: '#dc2626' },
-]
-
-// ── Mock schedule ─────────────────────────────────────────────────────────────
-const INITIAL_CLASSES: ClassEntry[] = [
-  { id: 1, course: 'Big Data Analytics', code: 'IS401', room: 'C204', instructor: 'Dr. Al Mansoori', color: '#7c3aed', days: [0, 2], startTime: '09:00', endTime: '10:30' },
-  { id: 2, course: 'Database Systems', code: 'IS312', room: 'B105', instructor: 'Dr. Hassan', color: '#0891b2', days: [1, 3], startTime: '11:00', endTime: '12:30' },
-  { id: 3, course: 'Applied Statistics', code: 'MATH301', room: 'A210', instructor: 'Dr. Fatima Al Zaabi', color: '#059669', days: [0, 2, 4], startTime: '08:00', endTime: '09:00' },
-  { id: 4, course: 'Cybersecurity Fundamentals', code: 'IS320', room: 'D301', instructor: 'Dr. Ahmed Khalil', color: '#dc2626', days: [1, 4], startTime: '13:00', endTime: '14:30' },
+const FALLBACK_COURSES = [
+  { name: 'Big Data Analytics', color: '#7c3aed' },
+  { name: 'Database Systems', color: '#0891b2' },
+  { name: 'Applied Statistics', color: '#059669' },
+  { name: 'Cybersecurity Fundamentals', color: '#dc2626' },
 ]
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -83,20 +85,23 @@ function blockHeight(startTime: string, endTime: string) {
 }
 
 // ── Add Class Modal ───────────────────────────────────────────────────────────
-function AddClassModal({ isOpen, onClose, onAdd }: {
-  isOpen: boolean; onClose: () => void; onAdd: (c: ClassEntry) => void
+function AddClassModal({ isOpen, onClose, onAdd, courseOptions }: {
+  isOpen: boolean
+  onClose: () => void
+  onAdd: (entry: { course_name: string; room: string; color: string; start_time: string; end_time: string; course_id?: string | null }, days: number[]) => void
+  courseOptions: { name: string; color: string; id?: string }[]
 }) {
   const [courseIdx, setCourseIdx] = useState(0)
   const [room, setRoom] = useState('')
   const [startTime, setStartTime] = useState('09:00')
   const [endTime, setEndTime] = useState('10:30')
   const [selectedDays, setSelectedDays] = useState<number[]>([])
-  const [color, setColor] = useState(COURSES_LIST[0].color)
+  const [color, setColor] = useState(courseOptions[0]?.color ?? COLOR_OPTIONS[0].value)
 
   // sync color when course changes
   function handleCourseChange(idx: number) {
     setCourseIdx(idx)
-    setColor(COURSES_LIST[idx].color)
+    setColor(courseOptions[idx]?.color ?? COLOR_OPTIONS[0].value)
   }
 
   function toggleDay(d: number) {
@@ -112,12 +117,12 @@ function AddClassModal({ isOpen, onClose, onAdd }: {
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     if (!selectedDays.length || durationMins <= 0) return
-    const c = COURSES_LIST[courseIdx]
+    const c = courseOptions[courseIdx]
     onAdd({
-      id: Date.now(), course: c.name, code: c.code,
-      room: room.trim() || 'TBD', instructor: '', color,
-      days: selectedDays, startTime, endTime,
-    })
+      course_name: c.name, course_id: c.id ?? null,
+      room: room.trim() || 'TBD', color,
+      start_time: startTime, end_time: endTime,
+    }, selectedDays)
     setRoom(''); setStartTime('09:00'); setEndTime('10:30'); setSelectedDays([])
     onClose()
   }
@@ -132,17 +137,17 @@ function AddClassModal({ isOpen, onClose, onAdd }: {
           <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Course</label>
           <select className={field} value={courseIdx}
             onChange={e => handleCourseChange(Number(e.target.value))}>
-            {COURSES_LIST.map((c, i) => <option key={c.code} value={i}>{c.name}</option>)}
+            {courseOptions.map((c, i) => <option key={c.name} value={i}>{c.name}</option>)}
           </select>
         </div>
 
         {/* Days (multi-select) */}
         <div>
           <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-2">Days *</label>
-          <div className="flex gap-2">
+          <div className="flex gap-1.5 sm:gap-2 flex-wrap">
             {DAYS.map((d, i) => (
               <button key={d} type="button" onClick={() => toggleDay(i)}
-                className={`flex-1 py-2 rounded-xl text-sm font-medium border transition-all ${
+                className={`flex-1 min-w-[2.5rem] py-2 rounded-xl text-sm font-medium border transition-all ${
                   selectedDays.includes(i)
                     ? 'text-white border-transparent'
                     : 'border-gray-200 dark:border-white/10 text-gray-600 dark:text-gray-400 hover:border-violet-400'
@@ -270,23 +275,23 @@ function Timetable({ classes }: { classes: ClassEntry[] }) {
 
               {/* Class blocks */}
               {classes
-                .filter(c => c.days.includes(dayIdx))
+                .filter(c => c.day_of_week === dayIdx)
                 .map(c => {
-                  const top = topOffset(c.startTime)
-                  const height = blockHeight(c.startTime, c.endTime)
-                  const live = isNowInSlot(c.startTime, c.endTime) && dayIdx === todayIdx
+                  const top = topOffset(c.start_time)
+                  const height = blockHeight(c.start_time, c.end_time)
+                  const live = isNowInSlot(c.start_time, c.end_time) && dayIdx === todayIdx
                   return (
                     <div key={c.id}
                       className="absolute left-1 right-1 rounded-xl px-2 py-1.5 overflow-hidden cursor-pointer hover:brightness-110 transition-all z-10"
                       style={{ top, height, backgroundColor: `${c.color}20`, borderLeft: `3px solid ${c.color}` }}>
-                      <p className="text-xs font-semibold truncate" style={{ color: c.color }}>{c.course}</p>
+                      <p className="text-xs font-semibold truncate" style={{ color: c.color }}>{c.course_name}</p>
                       {height > 48 && (
                         <>
                           <p className="text-xs text-gray-500 dark:text-gray-400 flex items-center gap-1 mt-0.5">
                             <MapPin className="w-2.5 h-2.5" /> {c.room}
                           </p>
                           <p className="text-xs text-gray-400 dark:text-gray-500 flex items-center gap-1">
-                            <Clock className="w-2.5 h-2.5" /> {formatTime(c.startTime)}–{formatTime(c.endTime)}
+                            <Clock className="w-2.5 h-2.5" /> {formatTime(c.start_time)}–{formatTime(c.end_time)}
                           </p>
                         </>
                       )}
@@ -308,8 +313,8 @@ function Timetable({ classes }: { classes: ClassEntry[] }) {
 function TodayList({ classes }: { classes: ClassEntry[] }) {
   const todayIdx = new Date().getDay()
   const todayClasses = classes
-    .filter(c => c.days.includes(todayIdx))
-    .sort((a, b) => timeToMinutes(a.startTime) - timeToMinutes(b.startTime))
+    .filter(c => c.day_of_week === todayIdx)
+    .sort((a, b) => timeToMinutes(a.start_time) - timeToMinutes(b.start_time))
 
   if (todayClasses.length === 0) {
     return (
@@ -322,21 +327,21 @@ function TodayList({ classes }: { classes: ClassEntry[] }) {
   return (
     <div className="space-y-3">
       {todayClasses.map(c => {
-        const live = isNowInSlot(c.startTime, c.endTime)
+        const live = isNowInSlot(c.start_time, c.end_time)
         return (
           <div key={c.id} className="flex items-center gap-3 p-3 rounded-xl bg-gray-50 dark:bg-white/5">
             <div className="w-1 self-stretch rounded-full" style={{ backgroundColor: c.color }} />
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2">
-                <p className="text-sm font-medium text-gray-900 dark:text-white truncate">{c.course}</p>
+                <p className="text-sm font-medium text-gray-900 dark:text-white truncate">{c.course_name}</p>
                 {live && <span className="text-xs font-semibold text-red-500 animate-pulse">● LIVE</span>}
               </div>
               <p className="text-xs text-gray-500 dark:text-gray-400">
-                {formatTime(c.startTime)} – {formatTime(c.endTime)} · {c.room}
+                {formatTime(c.start_time)} – {formatTime(c.end_time)} · {c.room}
               </p>
             </div>
             <span className="text-xs text-gray-400 dark:text-gray-500">
-              {minutesToTime(timeToMinutes(c.endTime) - timeToMinutes(c.startTime)).replace(':', 'h ')}m
+              {minutesToTime(timeToMinutes(c.end_time) - timeToMinutes(c.start_time)).replace(':', 'h ')}m
             </span>
           </div>
         )
@@ -347,21 +352,20 @@ function TodayList({ classes }: { classes: ClassEntry[] }) {
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
 export default function SchedulePage() {
-  const [classes, setClasses] = useState<ClassEntry[]>(INITIAL_CLASSES)
+  const { classes, loading, addClassForDays } = useSchedule()
+  const { courses } = useCourses()
   const [showAdd, setShowAdd] = useState(false)
-  const [loading, setLoading] = useState(true)
   const [view, setView] = useState<'week' | 'today'>('week')
 
-  useEffect(() => {
-    const t = setTimeout(() => setLoading(false), 800)
-    return () => clearTimeout(t)
-  }, [])
+  const courseOptions = courses.length > 0
+    ? courses.map(c => ({ name: c.name, color: c.color, id: c.id }))
+    : FALLBACK_COURSES
 
   const todayName = DAY_FULL[new Date().getDay()]
 
   if (loading) {
     return (
-      <div className="p-6 max-w-7xl mx-auto space-y-4">
+      <div className="p-4 sm:p-6 max-w-7xl mx-auto space-y-4">
         <SkeletonLoader className="h-16 w-72 rounded-2xl" />
         <SkeletonLoader className="h-10 w-48 rounded-full" />
         <SkeletonLoader className="h-[480px] rounded-2xl" />
@@ -370,27 +374,33 @@ export default function SchedulePage() {
   }
 
   return (
-    <div className="p-6 max-w-7xl mx-auto space-y-5">
+    <div className="p-4 sm:p-6 max-w-7xl mx-auto space-y-5">
 
       {/* Header */}
-      <div className="flex items-start justify-between gap-4">
+      <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
         <div>
-          <h1 className="font-playfair text-3xl font-bold text-gray-900 dark:text-white">Schedule</h1>
+          <h1 className="font-playfair text-2xl sm:text-3xl font-bold text-gray-900 dark:text-white">Schedule</h1>
           <p className="text-gray-500 dark:text-gray-400 mt-1 text-sm">
             {todayName} · {classes.length} classes this week
           </p>
         </div>
-        <Button variant="primary" size="md" onClick={() => setShowAdd(true)}
-          className="flex items-center gap-2 flex-shrink-0">
-          <Plus className="w-4 h-4" /> Add Class
-        </Button>
+        <div className="flex items-center gap-2 flex-shrink-0">
+          <Button variant="secondary" size="md" onClick={() => exportScheduleToICS(classes)}
+            className="flex items-center gap-2" disabled={classes.length === 0}>
+            <Download className="w-4 h-4" /> <span className="hidden sm:inline">Export to Calendar</span><span className="sm:hidden">Export</span>
+          </Button>
+          <Button variant="primary" size="md" onClick={() => setShowAdd(true)}
+            className="flex items-center gap-2">
+            <Plus className="w-4 h-4" /> Add Class
+          </Button>
+        </div>
       </div>
 
       {/* View toggle */}
-      <div className="flex gap-1 p-1 bg-gray-100 dark:bg-white/5 rounded-2xl w-fit">
+      <div className="flex gap-1 p-1 bg-gray-100 dark:bg-white/5 rounded-2xl w-fit overflow-x-auto max-w-full">
         {(['week', 'today'] as const).map(v => (
           <button key={v} onClick={() => setView(v)}
-            className={`px-5 py-1.5 rounded-xl text-sm font-medium transition-all duration-200 capitalize ${
+            className={`px-3 sm:px-5 py-1.5 rounded-xl text-sm font-medium transition-all duration-200 capitalize whitespace-nowrap ${
               view === v
                 ? 'bg-white dark:bg-white/15 text-gray-900 dark:text-white shadow-sm'
                 : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'
@@ -401,18 +411,25 @@ export default function SchedulePage() {
       </div>
 
       {/* Content */}
-      {view === 'week' ? (
-        <Timetable classes={classes} />
-      ) : (
-        <div className="max-w-xl">
-          <TodayList classes={classes} />
-        </div>
-      )}
+      {/* On mobile, default to the Today list view regardless of toggle, since the grid needs horizontal scroll */}
+      <div className="md:hidden">
+        <TodayList classes={classes} />
+      </div>
+      <div className="hidden md:block">
+        {view === 'week' ? (
+          <Timetable classes={classes} />
+        ) : (
+          <div className="max-w-xl">
+            <TodayList classes={classes} />
+          </div>
+        )}
+      </div>
 
       <AddClassModal
         isOpen={showAdd}
         onClose={() => setShowAdd(false)}
-        onAdd={c => setClasses(prev => [...prev, c])}
+        onAdd={(entry, days) => addClassForDays(entry, days)}
+        courseOptions={courseOptions}
       />
     </div>
   )

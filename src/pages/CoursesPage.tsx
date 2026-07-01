@@ -6,56 +6,7 @@ import Badge from '../components/ui/Badge'
 import Button from '../components/ui/Button'
 import Modal from '../components/ui/Modal'
 import SkeletonLoader from '../components/ui/SkeletonLoader'
-import { useEffect } from 'react'
-
-// ── Types ─────────────────────────────────────────────────────────────────────
-interface Course {
-  id: number
-  name: string
-  code: string
-  instructor: string
-  color: string
-  status: 'active' | 'completed' | 'upcoming'
-  credits: number
-  progress: number // 0–100
-  nextDeadline: string | null
-  nextClassDay: string | null
-  topics: number
-}
-
-// ── Mock data ─────────────────────────────────────────────────────────────────
-const INITIAL_COURSES: Course[] = [
-  {
-    id: 1, name: 'Big Data Analytics', code: 'IS401', instructor: 'Dr. Al Mansoori',
-    color: '#7c3aed', status: 'active', credits: 3, progress: 65,
-    nextDeadline: 'Lab Report 3 — Today', nextClassDay: 'Sun, 09:00–10:30', topics: 10,
-  },
-  {
-    id: 2, name: 'Database Systems', code: 'IS312', instructor: 'Dr. Hassan',
-    color: '#0891b2', status: 'active', credits: 3, progress: 48,
-    nextDeadline: 'ERD Assignment — Tomorrow', nextClassDay: 'Mon, 11:00–12:30', topics: 12,
-  },
-  {
-    id: 3, name: 'Applied Statistics', code: 'MATH301', instructor: 'Dr. Fatima Al Zaabi',
-    color: '#059669', status: 'active', credits: 3, progress: 72,
-    nextDeadline: 'Assignment 2 — in 4 days', nextClassDay: 'Tue, 08:00–09:30', topics: 9,
-  },
-  {
-    id: 4, name: 'Cybersecurity Fundamentals', code: 'IS320', instructor: 'Dr. Ahmed Khalil',
-    color: '#dc2626', status: 'active', credits: 3, progress: 30,
-    nextDeadline: 'Network Quiz — in 6 days', nextClassDay: 'Wed, 13:00–14:30', topics: 8,
-  },
-  {
-    id: 5, name: 'Data Structures', code: 'CS201', instructor: 'Dr. Sara Mahmoud',
-    color: '#d97706', status: 'completed', credits: 3, progress: 100,
-    nextDeadline: null, nextClassDay: null, topics: 14,
-  },
-  {
-    id: 6, name: 'Web Development', code: 'CS305', instructor: 'Dr. Omar Al Rashidi',
-    color: '#7c3aed', status: 'upcoming', credits: 3, progress: 0,
-    nextDeadline: null, nextClassDay: 'Starts next semester', topics: 0,
-  },
-]
+import { useCourses, type Course } from '../hooks/useCourses'
 
 const COLOR_OPTIONS = [
   { value: '#7c3aed', label: 'Violet' },
@@ -70,6 +21,7 @@ const COLOR_OPTIONS = [
 function CourseCard({ course, onClick }: { course: Course; onClick: () => void }) {
   const isCompleted = course.status === 'completed'
   const isUpcoming = course.status === 'upcoming'
+  const topicsCount = Array.isArray(course.topics) ? course.topics.length : 0
 
   return (
     <Card
@@ -108,7 +60,7 @@ function CourseCard({ course, onClick }: { course: Course; onClick: () => void }
         <div className="mt-4">
           <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400 mb-1">
             <span>{isUpcoming ? 'Not started' : `${course.progress}% complete`}</span>
-            <span>{course.topics} topics</span>
+            <span>{topicsCount} topics</span>
           </div>
           <div className="h-1.5 rounded-full bg-gray-100 dark:bg-white/10 overflow-hidden">
             <div
@@ -125,20 +77,16 @@ function CourseCard({ course, onClick }: { course: Course; onClick: () => void }
       )}
 
       {/* Meta row */}
-      {(course.nextDeadline || course.nextClassDay) && (
-        <div className="mt-3 pt-3 border-t border-gray-100 dark:border-white/5 flex flex-wrap gap-3 text-xs text-gray-500 dark:text-gray-400">
-          {course.nextDeadline && (
-            <span className="flex items-center gap-1">
-              <GraduationCap className="w-3 h-3" /> {course.nextDeadline}
-            </span>
-          )}
-          {course.nextClassDay && (
-            <span className="flex items-center gap-1">
-              <Clock className="w-3 h-3" /> {course.nextClassDay}
-            </span>
-          )}
-        </div>
-      )}
+      <div className="mt-3 pt-3 border-t border-gray-100 dark:border-white/5 flex flex-wrap gap-3 text-xs text-gray-500 dark:text-gray-400">
+        {course.semester && (
+          <span className="flex items-center gap-1">
+            <GraduationCap className="w-3 h-3" /> {course.semester}
+          </span>
+        )}
+        <span className="flex items-center gap-1">
+          <Clock className="w-3 h-3" /> {new Date(course.created_at).toLocaleDateString()}
+        </span>
+      </div>
     </Card>
   )
 }
@@ -147,7 +95,7 @@ function CourseCard({ course, onClick }: { course: Course; onClick: () => void }
 interface AddCourseModalProps {
   isOpen: boolean
   onClose: () => void
-  onAdd: (course: Course) => void
+  onAdd: (course: { name: string; code: string; instructor: string; credits: number; color: string; status: Course['status'] }) => void
 }
 
 function AddCourseModal({ isOpen, onClose, onAdd }: AddCourseModalProps) {
@@ -160,17 +108,12 @@ function AddCourseModal({ isOpen, onClose, onAdd }: AddCourseModalProps) {
     e.preventDefault()
     if (!form.name.trim() || !form.code.trim()) return
     onAdd({
-      id: Date.now(),
       name: form.name.trim(),
       code: form.code.trim(),
       instructor: form.instructor.trim(),
       color: form.color,
       status: form.status,
       credits: parseInt(form.credits) || 3,
-      progress: 0,
-      nextDeadline: null,
-      nextClassDay: null,
-      topics: 0,
     })
     setForm({ name: '', code: '', instructor: '', credits: '3', color: '#7c3aed', status: 'active' })
     onClose()
@@ -242,16 +185,10 @@ function AddCourseModal({ isOpen, onClose, onAdd }: AddCourseModalProps) {
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
 export default function CoursesPage() {
-  const [courses, setCourses] = useState<Course[]>(INITIAL_COURSES)
+  const { courses, loading, addCourse } = useCourses()
   const [filter, setFilter] = useState<'all' | 'active' | 'completed' | 'upcoming'>('all')
   const [showAdd, setShowAdd] = useState(false)
-  const [loading, setLoading] = useState(true)
   const navigate = useNavigate()
-
-  useEffect(() => {
-    const t = setTimeout(() => setLoading(false), 800)
-    return () => clearTimeout(t)
-  }, [])
 
   const filtered = filter === 'all' ? courses : courses.filter(c => c.status === filter)
   const counts = {
@@ -270,7 +207,7 @@ export default function CoursesPage() {
 
   if (loading) {
     return (
-      <div className="p-6 max-w-7xl mx-auto space-y-6">
+      <div className="p-4 sm:p-6 max-w-7xl mx-auto space-y-6">
         <SkeletonLoader className="h-16 w-80 rounded-2xl" />
         <SkeletonLoader className="h-10 w-96 rounded-full" />
         <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -281,7 +218,7 @@ export default function CoursesPage() {
   }
 
   return (
-    <div className="p-6 max-w-7xl mx-auto space-y-6">
+    <div className="p-4 sm:p-6 max-w-7xl mx-auto space-y-6">
 
       {/* Header */}
       <div className="flex items-start justify-between gap-4">
@@ -335,7 +272,7 @@ export default function CoursesPage() {
       <AddCourseModal
         isOpen={showAdd}
         onClose={() => setShowAdd(false)}
-        onAdd={c => setCourses(prev => [c, ...prev])}
+        onAdd={c => { addCourse(c) }}
       />
     </div>
   )

@@ -1,10 +1,13 @@
 import { useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { Moon, Sun, Check, User, Bell, LogOut } from 'lucide-react'
 import Card from '../components/ui/Card'
 import Button from '../components/ui/Button'
 import SkeletonLoader from '../components/ui/SkeletonLoader'
 import { useTheme } from '../hooks/useTheme'
 import { useLang } from '../hooks/useLang'
+import { useProfile } from '../hooks/useProfile'
+import { useAuth } from '../contexts/AuthContext'
 
 // ── Toast ─────────────────────────────────────────────────────────────────────
 function Toast({ message, onDone }: { message: string; onDone: () => void }) {
@@ -63,28 +66,44 @@ function SettingRow({ label, description, action }: { label: string; description
 
 // ── Main Component ────────────────────────────────────────────────────────────
 export default function SettingsPage() {
-  const [loading, setLoading] = useState(true)
   const [toast, setToast] = useState<string | null>(null)
   const { theme, setTheme } = useTheme()
   const { lang, setLang } = useLang()
+  const { profile, loading, update } = useProfile()
+  const { user, signOut } = useAuth()
+  const navigate = useNavigate()
+
+  const [editingProfile, setEditingProfile] = useState(false)
+  const [nameDraft, setNameDraft] = useState('')
 
   // Notification toggles (local state)
   const [deadlineReminders, setDeadlineReminders] = useState(true)
   const [dayBeforeReminders, setDayBeforeReminders] = useState(true)
   const [weeklySummary, setWeeklySummary] = useState(false)
 
-  useEffect(() => {
-    const timer = setTimeout(() => setLoading(false), 800)
-    return () => clearTimeout(timer)
-  }, [])
-
   function showToast(msg: string) {
     setToast(msg)
   }
 
+  function startEditProfile() {
+    setNameDraft(profile?.name ?? '')
+    setEditingProfile(true)
+  }
+
+  async function saveProfile() {
+    await update({ name: nameDraft.trim() })
+    setEditingProfile(false)
+    showToast('Profile updated')
+  }
+
+  async function handleSignOut() {
+    await signOut()
+    navigate('/login')
+  }
+
   if (loading) {
     return (
-      <div className="p-6 max-w-2xl mx-auto space-y-6">
+      <div className="p-4 sm:p-6 max-w-2xl mx-auto space-y-6">
         <SkeletonLoader className="h-10 w-48 rounded-xl" />
         {[1, 2, 3, 4].map(i => <SkeletonLoader key={i} className="h-40 rounded-2xl" />)}
       </div>
@@ -92,7 +111,7 @@ export default function SettingsPage() {
   }
 
   return (
-    <div className="p-6 max-w-2xl mx-auto space-y-8">
+    <div className="p-4 sm:p-6 max-w-2xl mx-auto space-y-8">
       {/* Header */}
       <div>
         <h1 className="font-playfair text-3xl font-bold text-gray-900 dark:text-white">Settings</h1>
@@ -101,18 +120,37 @@ export default function SettingsPage() {
 
       {/* Profile */}
       <Section title="Profile" icon={<User className="w-4 h-4" />}>
-        <div className="p-4 flex items-center gap-4">
-          <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-violet-500 to-cyan-500 flex items-center justify-center text-white text-2xl font-bold flex-shrink-0">
-            Z
+        {editingProfile ? (
+          <div className="p-4 space-y-3">
+            <div>
+              <label className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Name</label>
+              <input
+                value={nameDraft}
+                onChange={(e) => setNameDraft(e.target.value)}
+                className="mt-1 w-full px-3 py-2 rounded-xl bg-gray-100 dark:bg-white/10 border border-gray-200 dark:border-white/10 text-gray-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-violet-500"
+              />
+            </div>
+            <div className="flex gap-3">
+              <Button size="sm" variant="secondary" className="flex-1" onClick={() => setEditingProfile(false)}>Cancel</Button>
+              <Button size="sm" className="flex-1" onClick={saveProfile}>Save</Button>
+            </div>
           </div>
-          <div className="flex-1 min-w-0">
-            <p className="font-semibold text-gray-900 dark:text-white">Zayed</p>
-            <p className="text-sm text-gray-500 dark:text-gray-400">HCT · Data Science · 3rd Year</p>
+        ) : (
+          <div className="p-4 flex items-center gap-4">
+            <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-violet-500 to-cyan-500 flex items-center justify-center text-white text-2xl font-bold flex-shrink-0">
+              {(profile?.name ?? 'U').charAt(0).toUpperCase()}
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="font-semibold text-gray-900 dark:text-white">{profile?.name ?? 'Unnamed'}</p>
+              <p className="text-sm text-gray-500 dark:text-gray-400">
+                {[profile?.university, profile?.major, profile?.year_level].filter(Boolean).join(' · ') || 'No details set'}
+              </p>
+            </div>
+            <Button size="sm" variant="secondary" onClick={startEditProfile}>
+              Edit Profile
+            </Button>
           </div>
-          <Button size="sm" variant="secondary" onClick={() => showToast('Coming soon')}>
-            Edit Profile
-          </Button>
-        </div>
+        )}
       </Section>
 
       {/* Appearance */}
@@ -234,9 +272,9 @@ export default function SettingsPage() {
         <div className="p-4 flex items-center justify-between">
           <div>
             <p className="text-sm font-medium text-gray-900 dark:text-white">Sign Out</p>
-            <p className="text-xs text-gray-500 dark:text-gray-400">z4y3d.k@gmail.com</p>
+            <p className="text-xs text-gray-500 dark:text-gray-400">{user?.email ?? ''}</p>
           </div>
-          <Button variant="secondary" size="sm" onClick={() => showToast('Signed out!')}>
+          <Button variant="secondary" size="sm" onClick={handleSignOut}>
             Sign Out
           </Button>
         </div>

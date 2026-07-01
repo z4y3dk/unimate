@@ -1,6 +1,11 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
 import ReactMarkdown from 'react-markdown'
 import Button from '../components/ui/Button'
+import { useNotes } from '../hooks/useNotes'
+import { useCourses } from '../hooks/useCourses'
+import { useNoteFolders } from '../hooks/useNoteFolders'
+import { useNotePages } from '../hooks/useNotePages'
+import { useNoteAudio } from '../hooks/useNoteAudio'
 import {
   Search,
   Plus,
@@ -17,48 +22,18 @@ import {
   Sparkles,
   Loader2,
   ChevronLeft,
+  Folder,
+  FolderPlus,
+  X,
+  Tag,
+  ChevronRight,
+  FileText,
+  Mic,
+  Square,
+  Play,
+  Pause,
+  Type,
 } from 'lucide-react'
-
-interface Note {
-  id: number
-  title: string
-  course: string
-  courseColor: string
-  updatedAt: Date
-  content: string
-}
-
-const MOCK_NOTES: Note[] = [
-  {
-    id: 1,
-    title: 'MapReduce Overview',
-    course: 'Big Data Analytics',
-    courseColor: '#7c3aed',
-    updatedAt: new Date(Date.now() - 2 * 3600000),
-    content:
-      '# MapReduce Overview\n\nMapReduce is a programming model for processing large datasets...\n\n## Key Concepts\n- **Map Phase**: Processes input data and produces key-value pairs\n- **Reduce Phase**: Aggregates the key-value pairs\n- **HDFS**: Hadoop Distributed File System\n\n## Example\nWord count is the "Hello World" of MapReduce.',
-  },
-  {
-    id: 2,
-    title: 'SQL Joins Cheatsheet',
-    course: 'Database Systems',
-    courseColor: '#0891b2',
-    updatedAt: new Date(Date.now() - 1 * 86400000),
-    content:
-      '# SQL Joins\n\n## Types of Joins\n- **INNER JOIN**: Returns matching rows from both tables\n- **LEFT JOIN**: All rows from left + matching from right\n- **RIGHT JOIN**: All rows from right + matching from left\n- **FULL OUTER JOIN**: All rows from both tables',
-  },
-  {
-    id: 3,
-    title: 'Probability Distributions',
-    course: 'Applied Statistics',
-    courseColor: '#059669',
-    updatedAt: new Date(Date.now() - 3 * 86400000),
-    content:
-      '# Probability Distributions\n\n## Normal Distribution\nThe bell curve. Mean = median = mode.\n\n## Binomial Distribution\nFor discrete events with two outcomes.\n\n## Poisson Distribution\nFor counting events in fixed time intervals.',
-  },
-]
-
-const COURSES = ['All Courses', 'Big Data Analytics', 'Database Systems', 'Applied Statistics']
 
 const AI_MOCK: Record<string, string> = {
   Summarize:
@@ -71,7 +46,7 @@ const AI_MOCK: Record<string, string> = {
     "**Simplified:** Big Data Analytics is about working with huge amounts of data that normal computers can't handle. Hadoop is like a team of workers — each one handles a small piece of the data, then they combine results.",
 }
 
-type EditorMode = 'write' | 'draw' | 'preview'
+type EditorMode = 'write' | 'draw' | 'preview' | 'pdf'
 type DrawTool = 'pen' | 'highlighter' | 'eraser'
 
 interface Stroke {
@@ -79,12 +54,15 @@ interface Stroke {
   color: string
   size: number
   tool: DrawTool
+  pressures?: number[]
+  pointerType?: string
 }
 
 const DRAW_COLORS = ['#7c3aed', '#0891b2', '#059669', '#dc2626', '#d97706', '#1f2937']
 const DRAW_SIZES = [2, 4, 8, 16]
 
-function formatRelative(date: Date): string {
+function formatRelative(dateStr: string): string {
+  const date = new Date(dateStr)
   const diff = Date.now() - date.getTime()
   const hours = Math.floor(diff / 3600000)
   const days = Math.floor(diff / 86400000)
@@ -100,8 +78,6 @@ function drawStrokes(canvas: HTMLCanvasElement, strokeList: Stroke[]) {
   ctx.clearRect(0, 0, canvas.width, canvas.height)
   for (const stroke of strokeList) {
     if (stroke.points.length < 2) continue
-    ctx.beginPath()
-    ctx.lineWidth = stroke.size
     ctx.lineCap = 'round'
     ctx.lineJoin = 'round'
     if (stroke.tool === 'eraser') {
@@ -117,26 +93,60 @@ function drawStrokes(canvas: HTMLCanvasElement, strokeList: Stroke[]) {
       ctx.strokeStyle = stroke.color
       ctx.globalAlpha = 1
     }
-    ctx.moveTo(stroke.points[0].x, stroke.points[0].y)
+
+    // Draw segment-by-segment so we can vary width per pressure point
     for (let i = 1; i < stroke.points.length; i++) {
+      const pressure = stroke.pressures?.[i] ?? null
+      if (pressure !== null) {
+        ctx.lineWidth = stroke.size * (0.5 + pressure * 1.5)
+      } else {
+        ctx.lineWidth = stroke.size
+      }
+      ctx.beginPath()
+      ctx.moveTo(stroke.points[i - 1].x, stroke.points[i - 1].y)
       ctx.lineTo(stroke.points[i].x, stroke.points[i].y)
+      ctx.stroke()
     }
-    ctx.stroke()
+
     ctx.globalAlpha = 1
     ctx.globalCompositeOperation = 'source-over'
   }
 }
 
 export default function NotesPage() {
-  const [notes, setNotes] = useState<Note[]>(MOCK_NOTES)
-  const [activeNoteId, setActiveNoteId] = useState<number>(MOCK_NOTES[0].id)
+  const { notes, loading, addNote, updateNote, deleteNote } = useNotes()
+  const { courses } = useCourses()
+  const { folders, addFolder, updateFolder, deleteFolder } = useNoteFolders()
+
+  const [activeNoteId, setActiveNoteId] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedCourse, setSelectedCourse] = useState('All Courses')
+  const [selectedFolderId, setSelectedFolderId] = useState<string | 'all'>('all')
+  const [selectedTag, setSelectedTag] = useState<string | null>(null)
   const [editorMode, setEditorMode] = useState<EditorMode>('write')
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle')
   const [aiOutput, setAiOutput] = useState<string | null>(null)
   const [aiLoading, setAiLoading] = useState(false)
   const [showMobileEditor, setShowMobileEditor] = useState(false)
+  const [ocrLoading, setOcrLoading] = useState(false)
+  const [ocrToast, setOcrToast] = useState<string | null>(null)
+
+  // Folder management UI
+  const [showFolderEditor, setShowFolderEditor] = useState(false)
+  const [newFolderName, setNewFolderName] = useState('')
+  const [renamingFolderId, setRenamingFolderId] = useState<string | null>(null)
+  const [renameValue, setRenameValue] = useState('')
+
+  // Tag input
+  const [tagInput, setTagInput] = useState('')
+
+  // Local content/title buffers so typing doesn't wait on round-trips
+  const [draftContent, setDraftContent] = useState('')
+  const [draftTitle, setDraftTitle] = useState('')
+
+  // Pages (multi-page notes)
+  const { pages, addPage, updatePage, deletePage } = useNotePages(activeNoteId)
+  const [activePageIndex, setActivePageIndex] = useState(0)
 
   // Draw state
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -146,16 +156,81 @@ export default function NotesPage() {
   const [strokes, setStrokes] = useState<Stroke[]>([])
   const currentStrokeRef = useRef<Stroke | null>(null)
   const isDrawing = useRef(false)
+  // Pointer event tracking for palm rejection
+  const activePointerIdRef = useRef<number | null>(null)
+  const activePointerTypeRef = useRef<string | null>(null)
+
+  // PDF state
+  const [pdfDoc, setPdfDoc] = useState<any>(null)
+  const [pdfPage, setPdfPage] = useState(1)
+  const [pdfAnnotations, setPdfAnnotations] = useState<Map<number, Stroke[]>>(new Map())
+  const [pdfRendering, setPdfRendering] = useState(false)
+  const pdfCanvasRef = useRef<HTMLCanvasElement>(null)
+  const annotationCanvasRef = useRef<HTMLCanvasElement>(null)
+  const prevPdfPageRef = useRef<number>(1)
 
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
-  const activeNote = notes.find((n) => n.id === activeNoteId)!
+  // Derive audio key from active note + page so recording is per-page
+  const activeNote = notes.find((n) => n.id === activeNoteId) ?? null
+  const activePage = pages[activePageIndex] ?? null
+  const audioKey = activeNoteId
+    ? `${activeNoteId}__${activePage?.id ?? 'default'}`
+    : '__none__'
+
+  // Audio recording via useNoteAudio
+  const {
+    isRecording,
+    isPlaying,
+    hasRecording,
+    elapsedMs,
+    formatElapsed,
+    checkHasRecording,
+    startRecording,
+    stopRecording,
+    playRecording,
+    pauseRecording,
+    deleteRecording,
+    addMarker,
+  } = useNoteAudio(audioKey)
+
+  // Select first note once notes load
+  useEffect(() => {
+    if (!activeNoteId && notes.length > 0) {
+      setActiveNoteId(notes[0].id)
+    }
+  }, [notes, activeNoteId])
+
+  // Sync draft buffers when active note changes
+  useEffect(() => {
+    setDraftTitle(activeNote?.title ?? '')
+    setActivePageIndex(0)
+  }, [activeNote?.id]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Sync draft content when the active page changes (pages loaded/changed/switched)
+  useEffect(() => {
+    setDraftContent(activePage?.content ?? activeNote?.content ?? '')
+  }, [activePage?.id, activeNote?.id]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Check for existing recording when note/page changes
+  useEffect(() => {
+    if (activeNoteId) {
+      checkHasRecording()
+    }
+  }, [activeNoteId, activePage?.id]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const courseNames = courses.map((c) => c.name)
+  const COURSES_FILTER = ['All Courses', ...courseNames]
+
+  const allTags = Array.from(new Set(notes.flatMap((n) => n.tags ?? []))).sort()
 
   const filteredNotes = notes.filter((n) => {
     const matchSearch = n.title.toLowerCase().includes(searchQuery.toLowerCase())
-    const matchCourse = selectedCourse === 'All Courses' || n.course === selectedCourse
-    return matchSearch && matchCourse
+    const matchCourse = selectedCourse === 'All Courses' || n.course_name === selectedCourse
+    const matchFolder = selectedFolderId === 'all' || n.folder_id === selectedFolderId
+    const matchTag = !selectedTag || (n.tags ?? []).includes(selectedTag)
+    return matchSearch && matchCourse && matchFolder && matchTag
   })
 
   // Redraw canvas when switching to draw mode
@@ -165,20 +240,85 @@ export default function NotesPage() {
     }
   }, [editorMode]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Auto-save debounce
+  // Render PDF page when pdfDoc or pdfPage changes
+  useEffect(() => {
+    if (!pdfDoc || !pdfCanvasRef.current) return
+    let cancelled = false
+    setPdfRendering(true)
+    ;(async () => {
+      try {
+        const page = await pdfDoc.getPage(pdfPage)
+        const viewport = page.getViewport({ scale: 1.5 })
+        const canvas = pdfCanvasRef.current!
+        canvas.width = viewport.width
+        canvas.height = viewport.height
+        if (annotationCanvasRef.current) {
+          annotationCanvasRef.current.width = viewport.width
+          annotationCanvasRef.current.height = viewport.height
+        }
+        const ctx = canvas.getContext('2d')!
+        await page.render({ canvasContext: ctx, viewport }).promise
+        if (!cancelled) {
+          const pageStrokes = pdfAnnotations.get(pdfPage) ?? []
+          if (annotationCanvasRef.current) {
+            drawStrokes(annotationCanvasRef.current, pageStrokes)
+          }
+          setStrokes(pageStrokes)
+          setPdfRendering(false)
+        }
+      } catch {
+        if (!cancelled) setPdfRendering(false)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [pdfDoc, pdfPage]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Re-draw annotation canvas whenever strokes change in PDF mode
+  useEffect(() => {
+    if (editorMode === 'pdf' && annotationCanvasRef.current) {
+      drawStrokes(annotationCanvasRef.current, strokes)
+    }
+  }, [strokes, editorMode])
+
+  // Auto-save debounce (writes to the active page; falls back to note.content for page 1
+  // when no note_pages row exists yet, e.g. legacy notes not yet backfilled)
   const handleContentChange = useCallback(
     (value: string) => {
-      setNotes((prev) =>
-        prev.map((n) => (n.id === activeNoteId ? { ...n, content: value, updatedAt: new Date() } : n))
-      )
+      setDraftContent(value)
+      if (isRecording) {
+        // Add marker at current line count
+        const lineIndex = value.slice(0, value.length).split('\n').length - 1
+        addMarker(lineIndex)
+      }
       setSaveStatus('saving')
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
       saveTimerRef.current = setTimeout(() => {
+        if (activePage) {
+          updatePage(activePage.id, { content: value })
+        } else if (activeNoteId) {
+          updateNote(activeNoteId, { content: value })
+        }
         setSaveStatus('saved')
         setTimeout(() => setSaveStatus('idle'), 2000)
       }, 2000)
     },
-    [activeNoteId]
+    [activeNoteId, activePage, updateNote, updatePage, isRecording, addMarker]
+  )
+
+  const handleTitleChange = useCallback(
+    (value: string) => {
+      setDraftTitle(value)
+      setSaveStatus('saving')
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
+      saveTimerRef.current = setTimeout(() => {
+        if (activeNoteId) {
+          updateNote(activeNoteId, { title: value })
+        }
+        setSaveStatus('saved')
+        setTimeout(() => setSaveStatus('idle'), 2000)
+      }, 2000)
+    },
+    [activeNoteId, updateNote]
   )
 
   // Toolbar insert helpers
@@ -199,9 +339,103 @@ export default function NotesPage() {
     })
   }, [])
 
-  const getCanvasPoint = useCallback(
-    (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
+  // ── Pointer Events canvas handlers (Pointer Events API with palm rejection) ──
+  const getCanvasPointFromPointer = useCallback(
+    (e: React.PointerEvent<HTMLCanvasElement>) => {
       const canvas = canvasRef.current!
+      const rect = canvas.getBoundingClientRect()
+      const scaleX = canvas.width / rect.width
+      const scaleY = canvas.height / rect.height
+      return { x: (e.clientX - rect.left) * scaleX, y: (e.clientY - rect.top) * scaleY }
+    },
+    []
+  )
+
+  const handlePointerDown = useCallback(
+    (e: React.PointerEvent<HTMLCanvasElement>) => {
+      // Palm rejection: if a pen is active, ignore touch pointers
+      if (activePointerTypeRef.current === 'pen' && e.pointerType === 'touch') return
+
+      e.preventDefault()
+      ;(e.target as HTMLCanvasElement).setPointerCapture(e.pointerId)
+
+      activePointerIdRef.current = e.pointerId
+      activePointerTypeRef.current = e.pointerType
+      isDrawing.current = true
+
+      const pt = getCanvasPointFromPointer(e)
+      const isPen = e.pointerType === 'pen'
+      const pressure = isPen ? e.pressure : undefined
+
+      currentStrokeRef.current = {
+        points: [pt],
+        color: drawColor,
+        size: drawSize,
+        tool: drawTool,
+        pointerType: e.pointerType,
+        pressures: isPen ? [pressure ?? 0.5] : undefined,
+      }
+    },
+    [drawColor, drawSize, drawTool, getCanvasPointFromPointer]
+  )
+
+  const handlePointerMove = useCallback(
+    (e: React.PointerEvent<HTMLCanvasElement>) => {
+      // Only handle the active pointer
+      if (e.pointerId !== activePointerIdRef.current) return
+      if (!isDrawing.current || !currentStrokeRef.current) return
+
+      e.preventDefault()
+      const pt = getCanvasPointFromPointer(e)
+      const isPen = e.pointerType === 'pen'
+      const pressure = isPen ? e.pressure : undefined
+
+      const updatedStroke: Stroke = {
+        ...currentStrokeRef.current,
+        points: [...currentStrokeRef.current.points, pt],
+        pressures: isPen
+          ? [...(currentStrokeRef.current.pressures ?? []), pressure ?? 0.5]
+          : currentStrokeRef.current.pressures,
+      }
+      currentStrokeRef.current = updatedStroke
+
+      if (canvasRef.current) {
+        drawStrokes(canvasRef.current, [...strokes, currentStrokeRef.current])
+      }
+    },
+    [getCanvasPointFromPointer, strokes]
+  )
+
+  const handlePointerUp = useCallback(
+    (e: React.PointerEvent<HTMLCanvasElement>) => {
+      if (e.pointerId !== activePointerIdRef.current) return
+      if (!isDrawing.current || !currentStrokeRef.current) return
+
+      isDrawing.current = false
+      activePointerIdRef.current = null
+      activePointerTypeRef.current = null
+
+      const finished = currentStrokeRef.current
+      currentStrokeRef.current = null
+      setStrokes((prev) => [...prev, finished])
+    },
+    []
+  )
+
+  const handlePointerCancel = useCallback(
+    (e: React.PointerEvent<HTMLCanvasElement>) => {
+      if (e.pointerId !== activePointerIdRef.current) return
+      isDrawing.current = false
+      activePointerIdRef.current = null
+      activePointerTypeRef.current = null
+      currentStrokeRef.current = null
+    },
+    []
+  )
+
+  const getAnnotationCanvasPoint = useCallback(
+    (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
+      const canvas = annotationCanvasRef.current!
       const rect = canvas.getBoundingClientRect()
       const scaleX = canvas.width / rect.width
       const scaleY = canvas.height / rect.height
@@ -214,55 +448,162 @@ export default function NotesPage() {
     []
   )
 
-  const handleCanvasStart = useCallback(
+  // Annotation canvas handlers for PDF mode
+  const handleAnnotationStart = useCallback(
     (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
       e.preventDefault()
       isDrawing.current = true
-      const pt = getCanvasPoint(e)
+      const pt = getAnnotationCanvasPoint(e)
       currentStrokeRef.current = { points: [pt], color: drawColor, size: drawSize, tool: drawTool }
     },
-    [drawColor, drawSize, drawTool, getCanvasPoint]
+    [drawColor, drawSize, drawTool, getAnnotationCanvasPoint]
   )
 
-  const handleCanvasMove = useCallback(
+  const handleAnnotationMove = useCallback(
     (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
       e.preventDefault()
       if (!isDrawing.current || !currentStrokeRef.current) return
-      const pt = getCanvasPoint(e)
+      const pt = getAnnotationCanvasPoint(e)
       currentStrokeRef.current = {
         ...currentStrokeRef.current,
         points: [...currentStrokeRef.current.points, pt],
       }
-      if (canvasRef.current) {
-        drawStrokes(canvasRef.current, [...strokes, currentStrokeRef.current])
+      if (annotationCanvasRef.current) {
+        drawStrokes(annotationCanvasRef.current, [...strokes, currentStrokeRef.current])
       }
     },
-    [getCanvasPoint, strokes]
+    [getAnnotationCanvasPoint, strokes]
   )
 
-  const handleCanvasEnd = useCallback(() => {
+  const handleAnnotationEnd = useCallback(() => {
     if (!isDrawing.current || !currentStrokeRef.current) return
     isDrawing.current = false
     const finished = currentStrokeRef.current
     currentStrokeRef.current = null
-    setStrokes((prev) => [...prev, finished])
-  }, [])
+    setStrokes((prev) => {
+      const next = [...prev, finished]
+      setPdfAnnotations((map) => {
+        const newMap = new Map(map)
+        newMap.set(pdfPage, next)
+        return newMap
+      })
+      return next
+    })
+  }, [pdfPage])
 
   const handleUndo = useCallback(() => {
     setStrokes((prev) => {
       const next = prev.slice(0, -1)
-      if (canvasRef.current) drawStrokes(canvasRef.current, next)
+      if (editorMode === 'pdf') {
+        if (annotationCanvasRef.current) drawStrokes(annotationCanvasRef.current, next)
+        setPdfAnnotations((map) => {
+          const newMap = new Map(map)
+          newMap.set(pdfPage, next)
+          return newMap
+        })
+      } else {
+        if (canvasRef.current) drawStrokes(canvasRef.current, next)
+      }
       return next
     })
-  }, [])
+  }, [editorMode, pdfPage])
 
   const handleClearCanvas = useCallback(() => {
     setStrokes([])
+    if (editorMode === 'pdf') {
+      const canvas = annotationCanvasRef.current
+      if (!canvas) return
+      const ctx = canvas.getContext('2d')
+      ctx?.clearRect(0, 0, canvas.width, canvas.height)
+      setPdfAnnotations((map) => {
+        const newMap = new Map(map)
+        newMap.set(pdfPage, [])
+        return newMap
+      })
+    } else {
+      const canvas = canvasRef.current
+      if (!canvas) return
+      const ctx = canvas.getContext('2d')
+      ctx?.clearRect(0, 0, canvas.width, canvas.height)
+    }
+  }, [editorMode, pdfPage])
+
+  // ── PDF handlers ──────────────────────────────────────────────────────
+  const handlePdfFile = useCallback(async (file: File) => {
+    if (!file || file.type !== 'application/pdf') return
+    const reader = new FileReader()
+    reader.onload = async (ev) => {
+      const arrayBuffer = ev.target?.result as ArrayBuffer
+      const pdfjsLib: any = await import('pdfjs-dist')
+      pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
+        'pdfjs-dist/build/pdf.worker.min.mjs',
+        import.meta.url
+      ).toString()
+      const doc = await pdfjsLib.getDocument({ data: arrayBuffer }).promise
+      setPdfDoc(doc)
+      setPdfPage(1)
+      prevPdfPageRef.current = 1
+      setPdfAnnotations(new Map())
+      setStrokes([])
+    }
+    reader.readAsArrayBuffer(file)
+  }, [])
+
+  const handlePdfDrop = useCallback(
+    (e: React.DragEvent<HTMLDivElement>) => {
+      e.preventDefault()
+      const file = e.dataTransfer.files[0]
+      if (file) handlePdfFile(file)
+    },
+    [handlePdfFile]
+  )
+
+  const handlePdfPageChange = useCallback(
+    (newPage: number) => {
+      setPdfAnnotations((map) => {
+        const newMap = new Map(map)
+        newMap.set(prevPdfPageRef.current, strokes)
+        return newMap
+      })
+      prevPdfPageRef.current = newPage
+      setPdfPage(newPage)
+    },
+    [strokes]
+  )
+
+  const handleConvertToText = useCallback(async () => {
     const canvas = canvasRef.current
     if (!canvas) return
-    const ctx = canvas.getContext('2d')
-    ctx?.clearRect(0, 0, canvas.width, canvas.height)
-  }, [])
+    setOcrLoading(true)
+    try {
+      const { createWorker } = await import('tesseract.js')
+      const worker = await createWorker('eng')
+      const { data } = await worker.recognize(canvas)
+      await worker.terminate()
+
+      const text = data.text.trim()
+      const confidence = data.confidence
+
+      if (!text || confidence < 30) {
+        setOcrToast('Nothing recognized — try writing more clearly')
+        setTimeout(() => setOcrToast(null), 3000)
+      } else {
+        const appended = draftContent + '\n\n---\n*[Handwriting recognized]*\n' + text
+        setDraftContent(appended)
+        if (activePage) {
+          updatePage(activePage.id, { content: appended })
+        } else if (activeNoteId) {
+          updateNote(activeNoteId, { content: appended })
+        }
+        setEditorMode('write')
+      }
+    } catch {
+      setOcrToast('OCR failed — please try again')
+      setTimeout(() => setOcrToast(null), 3000)
+    } finally {
+      setOcrLoading(false)
+    }
+  }, [draftContent, activePage, activeNoteId, updatePage, updateNote])
 
   const handleAiAction = async (action: string) => {
     setAiLoading(true)
@@ -272,25 +613,110 @@ export default function NotesPage() {
     setAiLoading(false)
   }
 
-  const handleNewNote = () => {
-    const newNote: Note = {
-      id: Date.now(),
-      title: 'Untitled Note',
-      course: 'Big Data Analytics',
-      courseColor: '#7c3aed',
-      updatedAt: new Date(),
-      content: '',
+  // ── Page navigation ───────────────────────────────────────────────────
+  const handleAddPage = async () => {
+    const nextPageNumber = (pages[pages.length - 1]?.page_number ?? 0) + 1
+    const result = await addPage({ page_number: nextPageNumber, content: '', canvas_data: null })
+    if (result?.data) {
+      setActivePageIndex(pages.length)
     }
-    setNotes((prev) => [newNote, ...prev])
-    setActiveNoteId(newNote.id)
-    setShowMobileEditor(true)
-    setEditorMode('write')
   }
 
-  const handleSelectNote = (id: number) => {
+  const handlePrevPage = () => {
+    setActivePageIndex((i) => Math.max(0, i - 1))
+  }
+
+  const handleNextPage = () => {
+    setActivePageIndex((i) => Math.min(pages.length - 1, i + 1))
+  }
+
+  const handleDeletePage = async (id: string) => {
+    if (pages.length <= 1) return
+    await deletePage(id)
+    setActivePageIndex((i) => Math.max(0, i - 1))
+  }
+
+  // ── Folder management ────────────────────────────────────────────────
+  const handleCreateFolder = async () => {
+    const name = newFolderName.trim()
+    if (!name) return
+    await addFolder({ name })
+    setNewFolderName('')
+  }
+
+  const handleStartRenameFolder = (id: string, currentName: string) => {
+    setRenamingFolderId(id)
+    setRenameValue(currentName)
+  }
+
+  const handleConfirmRenameFolder = async () => {
+    const name = renameValue.trim()
+    if (renamingFolderId && name) {
+      await updateFolder(renamingFolderId, { name })
+    }
+    setRenamingFolderId(null)
+    setRenameValue('')
+  }
+
+  const handleDeleteFolder = async (id: string) => {
+    await deleteFolder(id)
+    if (selectedFolderId === id) setSelectedFolderId('all')
+  }
+
+  // ── Tag management ───────────────────────────────────────────────────
+  const handleAddTag = async () => {
+    const tag = tagInput.trim()
+    if (!tag || !activeNote) return
+    const existing = activeNote.tags ?? []
+    if (existing.includes(tag)) {
+      setTagInput('')
+      return
+    }
+    await updateNote(activeNote.id, { tags: [...existing, tag] })
+    setTagInput('')
+  }
+
+  const handleRemoveTag = async (tag: string) => {
+    if (!activeNote) return
+    const existing = activeNote.tags ?? []
+    await updateNote(activeNote.id, { tags: existing.filter((t) => t !== tag) })
+  }
+
+  const handleNewNote = async () => {
+    const firstCourse = courses[0]
+    const result = await addNote({
+      title: 'Untitled Note',
+      course_id: firstCourse?.id ?? null,
+      course_name: firstCourse?.name ?? 'General',
+      course_color: firstCourse?.color ?? '#7c3aed',
+      content: '',
+    })
+    if (result?.data) {
+      setActiveNoteId(result.data.id)
+      setShowMobileEditor(true)
+      setEditorMode('write')
+    }
+  }
+
+  const handleDeleteNote = async (id: string) => {
+    await deleteNote(id)
+    if (activeNoteId === id) {
+      setActiveNoteId(null)
+    }
+  }
+
+  const handleSelectNote = (id: string) => {
     setActiveNoteId(id)
     setShowMobileEditor(true)
     setAiOutput(null)
+  }
+
+  if (loading) {
+    return (
+      <div className="flex h-full items-center justify-center text-sm text-gray-400">
+        Loading notes...
+      </div>
+    )
   }
 
   return (
@@ -298,7 +724,7 @@ export default function NotesPage() {
       {/* Sidebar */}
       <aside
         className={[
-          'flex-shrink-0 w-72 flex flex-col',
+          'flex-shrink-0 w-full md:w-72 flex flex-col',
           'bg-gray-50 dark:bg-white/[0.03] border-r border-gray-200 dark:border-white/10',
           showMobileEditor ? 'hidden md:flex' : 'flex',
         ].join(' ')}
@@ -331,12 +757,118 @@ export default function NotesPage() {
             onChange={(e) => setSelectedCourse(e.target.value)}
             className="w-full px-3 py-1.5 text-sm bg-white dark:bg-white/5 border border-gray-200 dark:border-white/10 rounded-lg text-gray-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-violet-500"
           >
-            {COURSES.map((c) => (
+            {COURSES_FILTER.map((c) => (
               <option key={c} value={c}>
                 {c}
               </option>
             ))}
           </select>
+
+          {/* Folder filter */}
+          <div className="flex items-center gap-2">
+            <select
+              value={selectedFolderId}
+              onChange={(e) => setSelectedFolderId(e.target.value)}
+              className="flex-1 px-3 py-1.5 text-sm bg-white dark:bg-white/5 border border-gray-200 dark:border-white/10 rounded-lg text-gray-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-violet-500"
+            >
+              <option value="all">All Folders</option>
+              {folders.map((f) => (
+                <option key={f.id} value={f.id}>
+                  {f.name}
+                </option>
+              ))}
+            </select>
+            <button
+              onClick={() => setShowFolderEditor((v) => !v)}
+              title="Manage folders"
+              className={[
+                'p-1.5 rounded-md transition-colors flex-shrink-0',
+                showFolderEditor
+                  ? 'bg-violet-100 dark:bg-violet-900/40 text-violet-600 dark:text-violet-400'
+                  : 'text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-white/10',
+              ].join(' ')}
+            >
+              <FolderPlus size={16} />
+            </button>
+          </div>
+
+          {/* Folder editor */}
+          {showFolderEditor && (
+            <div className="space-y-2 p-2 bg-white dark:bg-white/5 border border-gray-200 dark:border-white/10 rounded-lg">
+              <div className="flex items-center gap-1">
+                <input
+                  type="text"
+                  placeholder="New folder name..."
+                  value={newFolderName}
+                  onChange={(e) => setNewFolderName(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleCreateFolder()}
+                  className="flex-1 px-2 py-1 text-xs bg-gray-50 dark:bg-white/5 border border-gray-200 dark:border-white/10 rounded-md text-gray-900 dark:text-white placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-violet-500"
+                />
+                <button
+                  onClick={handleCreateFolder}
+                  className="p-1 rounded-md text-violet-600 hover:bg-violet-50 dark:hover:bg-violet-900/20"
+                  title="Add folder"
+                >
+                  <Plus size={14} />
+                </button>
+              </div>
+              {folders.length === 0 ? (
+                <p className="text-xs text-gray-400 text-center py-1">No folders yet</p>
+              ) : (
+                folders.map((f) => (
+                  <div key={f.id} className="flex items-center gap-2 px-1">
+                    <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: f.color }} />
+                    {renamingFolderId === f.id ? (
+                      <input
+                        autoFocus
+                        type="text"
+                        value={renameValue}
+                        onChange={(e) => setRenameValue(e.target.value)}
+                        onKeyDown={(e) => e.key === 'Enter' && handleConfirmRenameFolder()}
+                        onBlur={handleConfirmRenameFolder}
+                        className="flex-1 px-1 py-0.5 text-xs bg-gray-50 dark:bg-white/10 border border-violet-300 dark:border-violet-700 rounded text-gray-900 dark:text-white focus:outline-none"
+                      />
+                    ) : (
+                      <button
+                        onClick={() => handleStartRenameFolder(f.id, f.name)}
+                        className="flex-1 text-left text-xs text-gray-700 dark:text-gray-300 truncate hover:text-violet-600 dark:hover:text-violet-400"
+                      >
+                        {f.name}
+                      </button>
+                    )}
+                    <button
+                      onClick={() => handleDeleteFolder(f.id)}
+                      className="p-0.5 rounded text-gray-400 hover:text-red-500"
+                      title="Delete folder"
+                    >
+                      <X size={12} />
+                    </button>
+                  </div>
+                ))
+              )}
+            </div>
+          )}
+
+          {/* Tag filter */}
+          {allTags.length > 0 && (
+            <div className="flex items-center gap-1 flex-wrap">
+              <Tag size={12} className="text-gray-400 flex-shrink-0" />
+              {allTags.map((tag) => (
+                <button
+                  key={tag}
+                  onClick={() => setSelectedTag((t) => (t === tag ? null : tag))}
+                  className={[
+                    'px-2 py-0.5 text-xs rounded-full transition-colors',
+                    selectedTag === tag
+                      ? 'bg-violet-500 text-white'
+                      : 'bg-gray-100 dark:bg-white/10 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-white/20',
+                  ].join(' ')}
+                >
+                  {tag}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Note list */}
@@ -360,15 +892,31 @@ export default function NotesPage() {
                   <div className="flex items-start gap-2">
                     <span
                       className="mt-1 w-2 h-2 rounded-full flex-shrink-0"
-                      style={{ backgroundColor: note.courseColor }}
+                      style={{ backgroundColor: note.course_color }}
                     />
                     <div className="min-w-0 flex-1">
                       <p className="text-sm font-medium text-gray-900 dark:text-white truncate">{note.title}</p>
-                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">{note.course}</p>
+                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">{note.course_name}</p>
                       <p className="text-xs text-gray-400 dark:text-gray-500 mt-0.5 truncate">
                         {note.content.replace(/[#*\-`]/g, '').slice(0, 60)}
                       </p>
-                      <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">{formatRelative(note.updatedAt)}</p>
+                      <div className="flex items-center gap-2 mt-1 flex-wrap">
+                        {note.folder_id && (
+                          <span className="inline-flex items-center gap-0.5 text-[10px] text-gray-400 dark:text-gray-500">
+                            <Folder size={10} />
+                            {folders.find((f) => f.id === note.folder_id)?.name}
+                          </span>
+                        )}
+                        {(note.tags ?? []).slice(0, 3).map((tag) => (
+                          <span
+                            key={tag}
+                            className="px-1.5 py-0.5 text-[10px] rounded-full bg-gray-100 dark:bg-white/10 text-gray-500 dark:text-gray-400"
+                          >
+                            {tag}
+                          </span>
+                        ))}
+                      </div>
+                      <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">{formatRelative(note.updated_at)}</p>
                     </div>
                   </div>
                 </button>
@@ -385,239 +933,677 @@ export default function NotesPage() {
           !showMobileEditor ? 'hidden md:flex' : 'flex',
         ].join(' ')}
       >
-        {/* Editor top bar */}
-        <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-white/10 flex-shrink-0">
-          <div className="flex items-center gap-3 min-w-0">
-            {/* Mobile back */}
-            <button
-              onClick={() => setShowMobileEditor(false)}
-              className="md:hidden p-1 rounded-lg text-gray-500 hover:bg-gray-100 dark:hover:bg-white/10 flex-shrink-0"
-            >
-              <ChevronLeft size={18} />
-            </button>
-
-            {/* Note title */}
-            <input
-              type="text"
-              value={activeNote?.title ?? ''}
-              onChange={(e) => {
-                setNotes((prev) =>
-                  prev.map((n) => (n.id === activeNoteId ? { ...n, title: e.target.value } : n))
-                )
-              }}
-              className="text-base font-semibold bg-transparent text-gray-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-violet-500 rounded px-1 min-w-0 truncate"
-            />
+        {!activeNote ? (
+          <div className="flex-1 flex items-center justify-center text-sm text-gray-400">
+            Select or create a note
           </div>
-
-          <div className="flex items-center gap-3 flex-shrink-0">
-            {/* Save status */}
-            <span className="text-xs text-gray-400 dark:text-gray-500 min-w-[60px] text-right">
-              {saveStatus === 'saving' && 'Saving...'}
-              {saveStatus === 'saved' && 'Saved ✓'}
-            </span>
-
-            {/* Mode toggle */}
-            <div className="flex items-center gap-1 bg-gray-100 dark:bg-white/5 rounded-xl p-1">
-              {(['write', 'draw', 'preview'] as EditorMode[]).map((mode) => (
+        ) : (
+          <>
+            {/* Editor top bar */}
+            <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-white/10 flex-shrink-0">
+              <div className="flex items-center gap-3 min-w-0">
+                {/* Mobile back */}
                 <button
-                  key={mode}
-                  onClick={() => setEditorMode(mode)}
-                  className={[
-                    'px-3 py-1 text-xs font-medium rounded-lg capitalize transition-colors',
-                    editorMode === mode
-                      ? 'bg-white dark:bg-white/10 text-gray-900 dark:text-white shadow-sm'
-                      : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200',
-                  ].join(' ')}
+                  onClick={() => setShowMobileEditor(false)}
+                  className="md:hidden p-1 rounded-lg text-gray-500 hover:bg-gray-100 dark:hover:bg-white/10 flex-shrink-0"
                 >
-                  {mode}
+                  <ChevronLeft size={18} />
                 </button>
-              ))}
-            </div>
-          </div>
-        </div>
 
-        {/* Write mode toolbar */}
-        {editorMode === 'write' && (
-          <div className="flex items-center gap-1 px-4 py-2 border-b border-gray-200 dark:border-white/10 flex-shrink-0">
-            {[
-              { icon: Heading1, label: 'H1', action: () => insertAtCursor('# ') },
-              { icon: Heading2, label: 'H2', action: () => insertAtCursor('## ') },
-              { icon: Bold, label: 'Bold', action: () => insertAtCursor('**', '**') },
-              { icon: Italic, label: 'Italic', action: () => insertAtCursor('*', '*') },
-              { icon: List, label: 'Bullet', action: () => insertAtCursor('- ') },
-            ].map(({ icon: Icon, label, action }) => (
-              <button
-                key={label}
-                title={label}
-                onClick={action}
-                className="p-1.5 rounded-md text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-white/10 transition-colors"
-              >
-                <Icon size={16} />
-              </button>
-            ))}
-          </div>
-        )}
-
-        {/* Draw mode toolbar */}
-        {editorMode === 'draw' && (
-          <div className="flex flex-wrap items-center gap-3 px-4 py-2 border-b border-gray-200 dark:border-white/10 flex-shrink-0">
-            {/* Tools */}
-            <div className="flex items-center gap-1">
-              {(
-                [
-                  ['pen', Pen],
-                  ['highlighter', Highlighter],
-                  ['eraser', Eraser],
-                ] as [DrawTool, React.ElementType][]
-              ).map(([tool, Icon]) => (
-                <button
-                  key={tool}
-                  title={tool}
-                  onClick={() => setDrawTool(tool)}
-                  className={[
-                    'p-1.5 rounded-md transition-colors capitalize',
-                    drawTool === tool
-                      ? 'bg-violet-100 dark:bg-violet-900/40 text-violet-600 dark:text-violet-400'
-                      : 'text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-white/10',
-                  ].join(' ')}
-                >
-                  <Icon size={16} />
-                </button>
-              ))}
-            </div>
-
-            {/* Colors */}
-            <div className="flex items-center gap-1">
-              {DRAW_COLORS.map((c) => (
-                <button
-                  key={c}
-                  onClick={() => setDrawColor(c)}
-                  title={c}
-                  className={[
-                    'w-5 h-5 rounded-full border-2 transition-transform',
-                    drawColor === c ? 'border-white scale-125' : 'border-transparent',
-                  ].join(' ')}
-                  style={{ backgroundColor: c }}
+                {/* Note title */}
+                <input
+                  type="text"
+                  value={draftTitle}
+                  onChange={(e) => handleTitleChange(e.target.value)}
+                  className="text-base font-semibold bg-transparent text-gray-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-violet-500 rounded px-1 min-w-0 truncate"
                 />
-              ))}
-            </div>
-
-            {/* Sizes */}
-            <div className="flex items-center gap-1">
-              {DRAW_SIZES.map((s) => (
-                <button
-                  key={s}
-                  onClick={() => setDrawSize(s)}
-                  title={`Size ${s}`}
-                  className={[
-                    'flex items-center justify-center w-6 h-6 rounded-md transition-colors',
-                    drawSize === s
-                      ? 'bg-violet-100 dark:bg-violet-900/40 text-violet-600'
-                      : 'text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-white/10',
-                  ].join(' ')}
-                >
-                  <span
-                    className="rounded-full bg-current"
-                    style={{ width: Math.min(s, 12), height: Math.min(s, 12) }}
-                  />
-                </button>
-              ))}
-            </div>
-
-            {/* Undo / Clear */}
-            <div className="flex items-center gap-1 ml-auto">
-              <button
-                onClick={handleUndo}
-                disabled={strokes.length === 0}
-                className="p-1.5 rounded-md text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-white/10 disabled:opacity-40 transition-colors"
-                title="Undo"
-              >
-                <Undo2 size={16} />
-              </button>
-              <button
-                onClick={handleClearCanvas}
-                className="p-1.5 rounded-md text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-white/10 transition-colors"
-                title="Clear"
-              >
-                <Trash2 size={16} />
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* Editor content */}
-        <div className="flex-1 overflow-y-auto p-4">
-          {editorMode === 'write' && (
-            <textarea
-              ref={textareaRef}
-              value={activeNote?.content ?? ''}
-              onChange={(e) => handleContentChange(e.target.value)}
-              placeholder="Start writing your note..."
-              className="w-full h-full min-h-[300px] bg-transparent text-gray-900 dark:text-gray-100 text-sm leading-relaxed resize-none focus:outline-none placeholder-gray-400 font-mono"
-              spellCheck
-            />
-          )}
-
-          {editorMode === 'draw' && (
-            <canvas
-              ref={canvasRef}
-              width={800}
-              height={400}
-              onMouseDown={handleCanvasStart}
-              onMouseMove={handleCanvasMove}
-              onMouseUp={handleCanvasEnd}
-              onMouseLeave={handleCanvasEnd}
-              onTouchStart={handleCanvasStart}
-              onTouchMove={handleCanvasMove}
-              onTouchEnd={handleCanvasEnd}
-              className="border border-gray-200 dark:border-white/10 rounded-xl bg-white dark:bg-gray-950 cursor-crosshair w-full"
-              style={{ height: '400px', touchAction: 'none' }}
-            />
-          )}
-
-          {editorMode === 'preview' && (
-            <div className="prose prose-sm dark:prose-invert max-w-none">
-              <ReactMarkdown>{activeNote?.content ?? ''}</ReactMarkdown>
-            </div>
-          )}
-
-          {/* AI actions (write + preview mode) */}
-          {(editorMode === 'write' || editorMode === 'preview') && (
-            <div className="mt-6">
-              <div className="flex items-center gap-2 flex-wrap">
-                <Sparkles size={14} className="text-violet-500" />
-                <span className="text-xs font-medium text-gray-500 dark:text-gray-400 mr-1">AI Actions:</span>
-                {['Summarize', 'Expand', 'Quiz Me', 'Simplify'].map((action) => (
-                  <Button
-                    key={action}
-                    size="sm"
-                    variant="secondary"
-                    onClick={() => handleAiAction(action)}
-                    disabled={aiLoading}
-                    className="text-xs"
-                  >
-                    {action}
-                  </Button>
-                ))}
               </div>
 
-              {aiLoading && (
-                <div className="flex items-center gap-2 mt-4 text-sm text-gray-500 dark:text-gray-400">
-                  <Loader2 size={16} className="animate-spin text-violet-500" />
-                  Generating...
+              <div className="flex items-center gap-3 flex-shrink-0">
+                {/* Save status */}
+                <span className="text-xs text-gray-400 dark:text-gray-500 min-w-[60px] text-right">
+                  {saveStatus === 'saving' && 'Saving...'}
+                  {saveStatus === 'saved' && 'Saved ✓'}
+                </span>
+
+                {/* Delete */}
+                <button
+                  onClick={() => handleDeleteNote(activeNote.id)}
+                  className="p-1.5 rounded-md text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+                  title="Delete note"
+                >
+                  <Trash2 size={16} />
+                </button>
+
+                {/* Mode toggle */}
+                <div className="flex items-center gap-1 bg-gray-100 dark:bg-white/5 rounded-xl p-1">
+                  {(['write', 'draw', 'preview'] as EditorMode[]).map((mode) => (
+                    <button
+                      key={mode}
+                      onClick={() => setEditorMode(mode)}
+                      className={[
+                        'px-3 py-1 text-xs font-medium rounded-lg capitalize transition-colors',
+                        editorMode === mode
+                          ? 'bg-white dark:bg-white/10 text-gray-900 dark:text-white shadow-sm'
+                          : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200',
+                      ].join(' ')}
+                    >
+                      {mode}
+                    </button>
+                  ))}
+                  {/* PDF tab */}
+                  <button
+                    onClick={() => setEditorMode('pdf')}
+                    className={[
+                      'px-3 py-1 text-xs font-medium rounded-lg flex items-center gap-1 transition-colors',
+                      editorMode === 'pdf'
+                        ? 'bg-white dark:bg-white/10 text-gray-900 dark:text-white shadow-sm'
+                        : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200',
+                    ].join(' ')}
+                  >
+                    <FileText size={12} />
+                    PDF
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Folder / tags / page bar */}
+            <div className="flex items-center justify-between gap-3 px-4 py-2 border-b border-gray-200 dark:border-white/10 flex-shrink-0 flex-wrap">
+              <div className="flex items-center gap-3 flex-wrap min-w-0">
+                {/* Folder assignment */}
+                <div className="flex items-center gap-1">
+                  <Folder size={14} className="text-gray-400" />
+                  <select
+                    value={activeNote.folder_id ?? ''}
+                    onChange={(e) => updateNote(activeNote.id, { folder_id: e.target.value || null })}
+                    className="text-xs bg-gray-100 dark:bg-white/5 border border-gray-200 dark:border-white/10 rounded-md px-1.5 py-1 text-gray-700 dark:text-gray-300 focus:outline-none focus:ring-1 focus:ring-violet-500"
+                  >
+                    <option value="">No Folder</option>
+                    {folders.map((f) => (
+                      <option key={f.id} value={f.id}>
+                        {f.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Tags */}
+                <div className="flex items-center gap-1 flex-wrap">
+                  <Tag size={14} className="text-gray-400" />
+                  {(activeNote.tags ?? []).map((tag) => (
+                    <span
+                      key={tag}
+                      className="inline-flex items-center gap-1 px-1.5 py-0.5 text-xs rounded-full bg-violet-50 dark:bg-violet-900/30 text-violet-600 dark:text-violet-400"
+                    >
+                      {tag}
+                      <button onClick={() => handleRemoveTag(tag)} className="hover:text-red-500">
+                        <X size={10} />
+                      </button>
+                    </span>
+                  ))}
+                  <input
+                    type="text"
+                    placeholder="Add tag..."
+                    value={tagInput}
+                    onChange={(e) => setTagInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ',') {
+                        e.preventDefault()
+                        handleAddTag()
+                      }
+                    }}
+                    className="w-20 px-1.5 py-0.5 text-xs bg-transparent border border-dashed border-gray-300 dark:border-white/20 rounded-md text-gray-700 dark:text-gray-300 placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-violet-500"
+                  />
+                </div>
+              </div>
+
+              {/* Page navigation */}
+              <div className="flex items-center gap-1 flex-shrink-0">
+                <FileText size={14} className="text-gray-400" />
+                <button
+                  onClick={handlePrevPage}
+                  disabled={activePageIndex === 0}
+                  className="p-1 rounded-md text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-white/10 disabled:opacity-30 transition-colors"
+                  title="Previous page"
+                >
+                  <ChevronLeft size={14} />
+                </button>
+                <span className="text-xs text-gray-500 dark:text-gray-400 min-w-[70px] text-center">
+                  Page {pages.length > 0 ? activePageIndex + 1 : 1} / {pages.length > 0 ? pages.length : 1}
+                </span>
+                <button
+                  onClick={handleNextPage}
+                  disabled={activePageIndex >= pages.length - 1}
+                  className="p-1 rounded-md text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-white/10 disabled:opacity-30 transition-colors"
+                  title="Next page"
+                >
+                  <ChevronRight size={14} />
+                </button>
+                <button
+                  onClick={handleAddPage}
+                  className="p-1 rounded-md text-violet-600 hover:bg-violet-50 dark:hover:bg-violet-900/20 transition-colors"
+                  title="Add page"
+                >
+                  <Plus size={14} />
+                </button>
+                {pages.length > 1 && activePage && (
+                  <button
+                    onClick={() => handleDeletePage(activePage.id)}
+                    className="p-1 rounded-md text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+                    title="Delete page"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Write mode toolbar */}
+            {editorMode === 'write' && (
+              <div className="flex items-center gap-1 px-4 py-2 border-b border-gray-200 dark:border-white/10 flex-shrink-0">
+                {[
+                  { icon: Heading1, label: 'H1', action: () => insertAtCursor('# ') },
+                  { icon: Heading2, label: 'H2', action: () => insertAtCursor('## ') },
+                  { icon: Bold, label: 'Bold', action: () => insertAtCursor('**', '**') },
+                  { icon: Italic, label: 'Italic', action: () => insertAtCursor('*', '*') },
+                  { icon: List, label: 'Bullet', action: () => insertAtCursor('- ') },
+                ].map(({ icon: Icon, label, action }) => (
+                  <button
+                    key={label}
+                    title={label}
+                    onClick={action}
+                    className="p-1.5 rounded-md text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-white/10 transition-colors"
+                  >
+                    <Icon size={16} />
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {/* Audio toolbar (Write mode only) */}
+            {editorMode === 'write' && (
+              <div className="flex items-center gap-2 px-4 py-2 border-b border-gray-200 dark:border-white/10 flex-shrink-0 bg-gray-50/50 dark:bg-white/[0.02]">
+                {/* Record / Stop button */}
+                {!isRecording ? (
+                  <button
+                    onClick={startRecording}
+                    title="Start recording"
+                    className="flex items-center gap-1.5 px-2 py-1 rounded-md text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors text-xs font-medium"
+                  >
+                    <Mic size={15} />
+                    Record
+                  </button>
+                ) : (
+                  <button
+                    onClick={stopRecording}
+                    title="Stop recording"
+                    className="flex items-center gap-1.5 px-2 py-1 rounded-md text-red-600 bg-red-50 dark:bg-red-900/20 hover:bg-red-100 dark:hover:bg-red-900/30 transition-colors text-xs font-medium"
+                  >
+                    <Square size={15} />
+                    Stop
+                  </button>
+                )}
+
+                {/* Recording indicator */}
+                {isRecording && (
+                  <div className="flex items-center gap-2">
+                    {/* Pulsing red dot */}
+                    <span className="relative flex h-2.5 w-2.5">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75" />
+                      <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-red-500" />
+                    </span>
+                    {/* Elapsed timer */}
+                    <span className="text-xs font-mono text-red-600 dark:text-red-400 min-w-[56px]">
+                      {formatElapsed(elapsedMs)}
+                    </span>
+                    {/* CSS waveform animation */}
+                    <div className="flex items-end gap-px h-4" aria-hidden>
+                      {[0, 1, 2, 3, 4].map((i) => (
+                        <span
+                          key={i}
+                          className="w-1 rounded-full bg-red-500"
+                          style={{
+                            animation: `audioBar 0.8s ease-in-out ${i * 0.12}s infinite alternate`,
+                            height: '40%',
+                          }}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Playback controls (when recording saved) */}
+                {hasRecording && !isRecording && (
+                  <div className="flex items-center gap-1 ml-1">
+                    <button
+                      onClick={isPlaying ? pauseRecording : playRecording}
+                      title={isPlaying ? 'Pause' : 'Play'}
+                      className="flex items-center gap-1 px-2 py-1 rounded-md text-violet-600 hover:bg-violet-50 dark:hover:bg-violet-900/20 transition-colors text-xs"
+                    >
+                      {isPlaying ? <Pause size={14} /> : <Play size={14} />}
+                      {isPlaying ? 'Pause' : 'Play'}
+                    </button>
+
+                    {/* Waveform animation during playback */}
+                    {isPlaying && (
+                      <div className="flex items-end gap-px h-4 ml-1" aria-hidden>
+                        {[0, 1, 2, 3, 4].map((i) => (
+                          <span
+                            key={i}
+                            className="w-1 rounded-full bg-violet-500"
+                            style={{
+                              animation: `audioBar 0.7s ease-in-out ${i * 0.1}s infinite alternate`,
+                              height: '40%',
+                            }}
+                          />
+                        ))}
+                      </div>
+                    )}
+
+                    <button
+                      onClick={deleteRecording}
+                      title="Delete recording"
+                      className="p-1 rounded-md text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                )}
+
+                <style>{`
+                  @keyframes audioBar {
+                    from { height: 20%; }
+                    to { height: 90%; }
+                  }
+                `}</style>
+              </div>
+            )}
+
+            {/* Recording available chip */}
+            {hasRecording && editorMode === 'write' && (
+              <div className="px-4 py-1 flex-shrink-0">
+                <span className="inline-flex items-center gap-1 text-[11px] text-violet-600 dark:text-violet-400 bg-violet-50 dark:bg-violet-900/20 px-2 py-0.5 rounded-full">
+                  🎙️ Recording available
+                </span>
+              </div>
+            )}
+
+            {/* Draw / PDF mode toolbar */}
+            {(editorMode === 'draw' || editorMode === 'pdf') && (
+              <div className="flex flex-wrap items-center gap-3 px-4 py-2 border-b border-gray-200 dark:border-white/10 flex-shrink-0">
+                {/* Tools */}
+                <div className="flex items-center gap-1">
+                  {(
+                    [
+                      ['pen', Pen],
+                      ['highlighter', Highlighter],
+                      ['eraser', Eraser],
+                    ] as [DrawTool, React.ElementType][]
+                  ).map(([tool, Icon]) => (
+                    <button
+                      key={tool}
+                      title={tool}
+                      onClick={() => setDrawTool(tool)}
+                      className={[
+                        'p-1.5 rounded-md transition-colors capitalize',
+                        drawTool === tool
+                          ? 'bg-violet-100 dark:bg-violet-900/40 text-violet-600 dark:text-violet-400'
+                          : 'text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-white/10',
+                      ].join(' ')}
+                    >
+                      <Icon size={16} />
+                    </button>
+                  ))}
+                </div>
+
+                {/* Colors */}
+                <div className="flex items-center gap-1">
+                  {DRAW_COLORS.map((c) => (
+                    <button
+                      key={c}
+                      onClick={() => setDrawColor(c)}
+                      title={c}
+                      className={[
+                        'w-5 h-5 rounded-full border-2 transition-transform',
+                        drawColor === c ? 'border-white scale-125' : 'border-transparent',
+                      ].join(' ')}
+                      style={{ backgroundColor: c }}
+                    />
+                  ))}
+                </div>
+
+                {/* Sizes */}
+                <div className="flex items-center gap-1">
+                  {DRAW_SIZES.map((s) => (
+                    <button
+                      key={s}
+                      onClick={() => setDrawSize(s)}
+                      title={`Size ${s}`}
+                      className={[
+                        'flex items-center justify-center w-6 h-6 rounded-md transition-colors',
+                        drawSize === s
+                          ? 'bg-violet-100 dark:bg-violet-900/40 text-violet-600'
+                          : 'text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-white/10',
+                      ].join(' ')}
+                    >
+                      <span
+                        className="rounded-full bg-current"
+                        style={{ width: Math.min(s, 12), height: Math.min(s, 12) }}
+                      />
+                    </button>
+                  ))}
+                </div>
+
+                {/* Undo / Clear / Convert to Text */}
+                <div className="flex items-center gap-1 ml-auto">
+                  <button
+                    onClick={handleUndo}
+                    disabled={strokes.length === 0}
+                    className="p-1.5 rounded-md text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-white/10 disabled:opacity-40 transition-colors"
+                    title="Undo"
+                  >
+                    <Undo2 size={16} />
+                  </button>
+                  <button
+                    onClick={handleClearCanvas}
+                    className="p-1.5 rounded-md text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-white/10 transition-colors"
+                    title="Clear"
+                  >
+                    <Trash2 size={16} />
+                  </button>
+                  {editorMode === 'draw' && (
+                    <button
+                      onClick={handleConvertToText}
+                      disabled={ocrLoading || strokes.length === 0}
+                      className="flex items-center gap-1 px-2 py-1.5 rounded-md text-sm text-violet-600 dark:text-violet-400 hover:bg-violet-50 dark:hover:bg-violet-900/20 disabled:opacity-40 transition-colors"
+                      title="Convert handwriting to text"
+                    >
+                      {ocrLoading ? (
+                        <Loader2 size={16} className="animate-spin" />
+                      ) : (
+                        <Type size={16} />
+                      )}
+                      <span className="text-xs hidden sm:inline">Convert to Text</span>
+                    </button>
+                  )}
+                  {editorMode === 'pdf' && pdfDoc && (
+                    <button
+                      onClick={() => {
+                        setPdfDoc(null)
+                        setPdfPage(1)
+                        setPdfAnnotations(new Map())
+                        setStrokes([])
+                      }}
+                      className="px-2 py-1 text-xs rounded-md text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+                      title="Clear PDF"
+                    >
+                      Clear PDF
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* PDF mode toolbar */}
+            {editorMode === 'pdf' && (
+              <div className="flex flex-wrap items-center gap-3 px-4 py-2 border-b border-gray-200 dark:border-white/10 flex-shrink-0">
+                {/* Tools */}
+                <div className="flex items-center gap-1">
+                  {(
+                    [
+                      ['pen', Pen],
+                      ['highlighter', Highlighter],
+                      ['eraser', Eraser],
+                    ] as [DrawTool, React.ElementType][]
+                  ).map(([tool, Icon]) => (
+                    <button
+                      key={tool}
+                      title={tool}
+                      onClick={() => setDrawTool(tool)}
+                      className={[
+                        'p-1.5 rounded-md transition-colors capitalize',
+                        drawTool === tool
+                          ? 'bg-violet-100 dark:bg-violet-900/40 text-violet-600 dark:text-violet-400'
+                          : 'text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-white/10',
+                      ].join(' ')}
+                    >
+                      <Icon size={16} />
+                    </button>
+                  ))}
+                </div>
+
+                {/* Colors */}
+                <div className="flex items-center gap-1">
+                  {DRAW_COLORS.map((c) => (
+                    <button
+                      key={c}
+                      onClick={() => setDrawColor(c)}
+                      title={c}
+                      className={[
+                        'w-5 h-5 rounded-full border-2 transition-transform',
+                        drawColor === c ? 'border-white scale-125' : 'border-transparent',
+                      ].join(' ')}
+                      style={{ backgroundColor: c }}
+                    />
+                  ))}
+                </div>
+
+                {/* Sizes */}
+                <div className="flex items-center gap-1">
+                  {DRAW_SIZES.map((s) => (
+                    <button
+                      key={s}
+                      onClick={() => setDrawSize(s)}
+                      title={`Size ${s}`}
+                      className={[
+                        'flex items-center justify-center w-6 h-6 rounded-md transition-colors',
+                        drawSize === s
+                          ? 'bg-violet-100 dark:bg-violet-900/40 text-violet-600'
+                          : 'text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-white/10',
+                      ].join(' ')}
+                    >
+                      <span
+                        className="rounded-full bg-current"
+                        style={{ width: Math.min(s, 12), height: Math.min(s, 12) }}
+                      />
+                    </button>
+                  ))}
+                </div>
+
+                {/* Undo / Clear / Clear PDF */}
+                <div className="flex items-center gap-1 ml-auto">
+                  <button
+                    onClick={handleUndo}
+                    disabled={strokes.length === 0}
+                    className="p-1.5 rounded-md text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-white/10 disabled:opacity-40 transition-colors"
+                    title="Undo"
+                  >
+                    <Undo2 size={16} />
+                  </button>
+                  <button
+                    onClick={handleClearCanvas}
+                    className="p-1.5 rounded-md text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-white/10 transition-colors"
+                    title="Clear annotations"
+                  >
+                    <Trash2 size={16} />
+                  </button>
+                  {pdfDoc && (
+                    <button
+                      onClick={() => {
+                        setPdfDoc(null)
+                        setPdfPage(1)
+                        setPdfAnnotations(new Map())
+                        setStrokes([])
+                      }}
+                      className="px-2 py-1 text-xs rounded-md text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+                      title="Clear PDF"
+                    >
+                      Clear PDF
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Editor content */}
+            <div className="flex-1 overflow-y-auto p-4 relative">
+              {/* OCR Toast */}
+              {ocrToast && (
+                <div className="absolute top-4 left-1/2 -translate-x-1/2 z-10 px-4 py-2 bg-gray-800 dark:bg-gray-700 text-white text-sm rounded-lg shadow-lg">
+                  {ocrToast}
                 </div>
               )}
 
-              {aiOutput && !aiLoading && (
-                <div className="bg-gray-50 dark:bg-white/5 rounded-xl p-4 mt-4 border border-gray-100 dark:border-white/10">
-                  <div className="prose prose-sm dark:prose-invert max-w-none">
-                    <ReactMarkdown>{aiOutput}</ReactMarkdown>
+              {editorMode === 'write' && (
+                <textarea
+                  ref={textareaRef}
+                  value={draftContent}
+                  onChange={(e) => handleContentChange(e.target.value)}
+                  placeholder="Start writing your note..."
+                  className="w-full h-full min-h-[300px] bg-transparent text-gray-900 dark:text-gray-100 text-sm leading-relaxed resize-none focus:outline-none placeholder-gray-400 font-mono"
+                  spellCheck
+                />
+              )}
+
+              {editorMode === 'draw' && (
+                <canvas
+                  ref={canvasRef}
+                  width={800}
+                  height={400}
+                  onPointerDown={handlePointerDown}
+                  onPointerMove={handlePointerMove}
+                  onPointerUp={handlePointerUp}
+                  onPointerCancel={handlePointerCancel}
+                  className="border border-gray-200 dark:border-white/10 rounded-xl bg-white dark:bg-gray-950 cursor-crosshair w-full"
+                  style={{ height: '400px', touchAction: 'none' }}
+                />
+              )}
+
+              {editorMode === 'preview' && (
+                <div className="prose prose-sm dark:prose-invert max-w-none">
+                  <ReactMarkdown>{draftContent}</ReactMarkdown>
+                </div>
+              )}
+
+              {editorMode === 'pdf' && (
+                <div className="flex flex-col gap-4">
+                  {!pdfDoc ? (
+                    <div
+                      onDrop={handlePdfDrop}
+                      onDragOver={(e) => e.preventDefault()}
+                      onClick={() => {
+                        const input = document.createElement('input')
+                        input.type = 'file'
+                        input.accept = 'application/pdf'
+                        input.onchange = (ev) => {
+                          const file = (ev.target as HTMLInputElement).files?.[0]
+                          if (file) handlePdfFile(file)
+                        }
+                        input.click()
+                      }}
+                      className="flex flex-col items-center justify-center border-2 border-dashed border-gray-300 dark:border-white/20 rounded-xl p-12 cursor-pointer hover:border-violet-400 dark:hover:border-violet-500 transition-colors"
+                    >
+                      <FileText size={40} className="text-gray-300 dark:text-gray-600 mb-3" />
+                      <p className="text-sm text-gray-500 dark:text-gray-400 text-center">
+                        Drop a PDF here or click to upload
+                      </p>
+                      <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
+                        Annotations are saved per-session
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="flex flex-col gap-3">
+                      {/* Page navigator */}
+                      <div className="flex items-center gap-2 justify-center">
+                        <button
+                          onClick={() => handlePdfPageChange(Math.max(1, pdfPage - 1))}
+                          disabled={pdfPage <= 1}
+                          className="p-1.5 rounded-md text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-white/10 disabled:opacity-30 transition-colors"
+                        >
+                          <ChevronLeft size={16} />
+                        </button>
+                        <span className="text-sm text-gray-600 dark:text-gray-300">
+                          Page {pdfPage} of {pdfDoc.numPages}
+                        </span>
+                        <button
+                          onClick={() => handlePdfPageChange(Math.min(pdfDoc.numPages, pdfPage + 1))}
+                          disabled={pdfPage >= pdfDoc.numPages}
+                          className="p-1.5 rounded-md text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-white/10 disabled:opacity-30 transition-colors"
+                        >
+                          <ChevronRight size={16} />
+                        </button>
+                      </div>
+
+                      {/* Canvas stack */}
+                      <div className="relative inline-block self-start w-full overflow-auto">
+                        {pdfRendering && (
+                          <div className="absolute inset-0 flex items-center justify-center z-10 bg-white/50 dark:bg-gray-950/50 rounded-xl">
+                            <Loader2 size={32} className="animate-spin text-violet-500" />
+                          </div>
+                        )}
+                        <canvas
+                          ref={pdfCanvasRef}
+                          className="block rounded-xl border border-gray-200 dark:border-white/10"
+                          style={{ pointerEvents: 'none' }}
+                        />
+                        <canvas
+                          ref={annotationCanvasRef}
+                          className="absolute top-0 left-0 rounded-xl cursor-crosshair"
+                          style={{ pointerEvents: 'auto', touchAction: 'none' }}
+                          onMouseDown={handleAnnotationStart}
+                          onMouseMove={handleAnnotationMove}
+                          onMouseUp={handleAnnotationEnd}
+                          onMouseLeave={handleAnnotationEnd}
+                          onTouchStart={handleAnnotationStart}
+                          onTouchMove={handleAnnotationMove}
+                          onTouchEnd={handleAnnotationEnd}
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* AI actions (write + preview mode) */}
+              {(editorMode === 'write' || editorMode === 'preview') && (
+                <div className="mt-6">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <Sparkles size={14} className="text-violet-500" />
+                    <span className="text-xs font-medium text-gray-500 dark:text-gray-400 mr-1">AI Actions:</span>
+                    {['Summarize', 'Expand', 'Quiz Me', 'Simplify'].map((action) => (
+                      <Button
+                        key={action}
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => handleAiAction(action)}
+                        disabled={aiLoading}
+                        className="text-xs"
+                      >
+                        {action}
+                      </Button>
+                    ))}
                   </div>
+
+                  {aiLoading && (
+                    <div className="flex items-center gap-2 mt-4 text-sm text-gray-500 dark:text-gray-400">
+                      <Loader2 size={16} className="animate-spin text-violet-500" />
+                      Generating...
+                    </div>
+                  )}
+
+                  {aiOutput && !aiLoading && (
+                    <div className="bg-gray-50 dark:bg-white/5 rounded-xl p-4 mt-4 border border-gray-100 dark:border-white/10">
+                      <div className="prose prose-sm dark:prose-invert max-w-none">
+                        <ReactMarkdown>{aiOutput}</ReactMarkdown>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
-          )}
-        </div>
+          </>
+        )}
       </div>
     </div>
   )

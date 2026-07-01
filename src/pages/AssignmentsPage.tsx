@@ -3,52 +3,37 @@ import { useNavigate } from 'react-router-dom'
 import { format, isToday, isTomorrow, isPast, differenceInDays } from 'date-fns'
 import {
   Plus, ClipboardList, CheckCircle2, Clock, MessageSquare,
-  AlertCircle, ChevronDown, Filter,
+  AlertCircle, ChevronDown, Filter, GraduationCap, Download,
 } from 'lucide-react'
 import Card from '../components/ui/Card'
 import Badge from '../components/ui/Badge'
 import Button from '../components/ui/Button'
 import Modal from '../components/ui/Modal'
 import SkeletonLoader from '../components/ui/SkeletonLoader'
+import { useAssignments, type Assignment } from '../hooks/useAssignments'
+import { useCourses } from '../hooks/useCourses'
+import { downloadICS, type ICSEvent } from '../utils/ics'
 
-// ── Types ─────────────────────────────────────────────────────────────────────
-type Status = 'pending' | 'in_progress' | 'submitted' | 'graded'
-type Priority = 'low' | 'medium' | 'high'
-type AssignmentType = 'assignment' | 'quiz' | 'project' | 'exam' | 'lab'
-
-interface Assignment {
-  id: number
-  title: string
-  course: string
-  courseColor: string
-  dueDate: Date
-  type: AssignmentType
-  status: Status
-  priority: Priority
-  description: string
-  xp: number
+// ── Calendar export ───────────────────────────────────────────────────────────
+function exportAssignmentsToICS(assignments: Assignment[]) {
+  const events: ICSEvent[] = assignments.map(a => {
+    const due = new Date(a.due_date)
+    const end = new Date(due.getTime() + 30 * 60 * 1000) // 30-min block
+    return {
+      uid: `assignment-${a.id}@unimate`,
+      summary: `Due: ${a.title}`,
+      description: `${a.course_name}${a.description ? ` — ${a.description}` : ''}`,
+      start: due,
+      end,
+    }
+  })
+  downloadICS(events, 'unimate-assignments.ics', 'UniMate Assignments')
 }
 
-// ── Mock data ─────────────────────────────────────────────────────────────────
-const now = Date.now()
-const day = 86400000
-
-const INITIAL: Assignment[] = [
-  { id: 1, title: 'Lab Report 3', course: 'Big Data Analytics', courseColor: '#7c3aed', dueDate: new Date(now), type: 'lab', status: 'in_progress', priority: 'high', description: 'Complete the Hadoop MapReduce lab and submit a written report with results.', xp: 10 },
-  { id: 2, title: 'Database ERD', course: 'Database Systems', courseColor: '#0891b2', dueDate: new Date(now + 1 * day), type: 'assignment', status: 'pending', priority: 'high', description: 'Design an entity-relationship diagram for the hospital management system case study.', xp: 10 },
-  { id: 3, title: 'Statistics Assignment 2', course: 'Applied Statistics', courseColor: '#059669', dueDate: new Date(now + 4 * day), type: 'assignment', status: 'pending', priority: 'medium', description: 'Solve problems on hypothesis testing and confidence intervals.', xp: 10 },
-  { id: 4, title: 'Network Security Quiz', course: 'Cybersecurity', courseColor: '#dc2626', dueDate: new Date(now + 6 * day), type: 'quiz', status: 'pending', priority: 'medium', description: 'Online quiz covering chapters 4–6: encryption, firewalls, and VPNs.', xp: 10 },
-  { id: 5, title: 'Midterm Project Proposal', course: 'Big Data Analytics', courseColor: '#7c3aed', dueDate: new Date(now + 10 * day), type: 'project', status: 'pending', priority: 'low', description: 'Submit a 1-page project proposal for the semester data pipeline project.', xp: 10 },
-  { id: 6, title: 'SQL Practice Set', course: 'Database Systems', courseColor: '#0891b2', dueDate: new Date(now - 5 * day), type: 'assignment', status: 'submitted', priority: 'low', description: 'Complete the 20-question SQL practice set on joins and subqueries.', xp: 10 },
-  { id: 7, title: 'Probability Quiz 1', course: 'Applied Statistics', courseColor: '#059669', dueDate: new Date(now - 10 * day), type: 'quiz', status: 'graded', priority: 'low', description: 'Quiz on basic probability rules and Bayes theorem.', xp: 10 },
-]
-
-const COURSES = [
-  { name: 'Big Data Analytics', color: '#7c3aed' },
-  { name: 'Database Systems', color: '#0891b2' },
-  { name: 'Applied Statistics', color: '#059669' },
-  { name: 'Cybersecurity', color: '#dc2626' },
-]
+// ── Types ─────────────────────────────────────────────────────────────────────
+type Status = Assignment['status']
+type Priority = Assignment['priority']
+type AssignmentType = Assignment['type']
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function getDueBadge(date: Date, status: Status) {
@@ -74,19 +59,23 @@ const PRIORITY_COLORS: Record<Priority, string> = {
 
 // ── Assignment Card ───────────────────────────────────────────────────────────
 function AssignmentCard({
-  a, onMarkComplete, onAskAI,
+  a, onMarkComplete, onAskAI, onGrade,
 }: {
   a: Assignment
-  onMarkComplete: (id: number) => void
+  onMarkComplete: (id: string) => void
   onAskAI: (a: Assignment) => void
+  onGrade: (a: Assignment) => void
 }) {
   const done = a.status === 'submitted' || a.status === 'graded'
+  const dueDate = new Date(a.due_date)
+  const hasScore = a.points_earned != null && a.points_possible != null && a.points_possible > 0
+  const pct = hasScore ? Math.round((a.points_earned! / a.points_possible!) * 1000) / 10 : null
 
   return (
     <Card className={`p-4 transition-all duration-200 ${done ? 'opacity-60' : ''}`}>
       <div className="flex items-start gap-3">
         {/* Color dot */}
-        <div className="mt-1 w-3 h-3 rounded-full flex-shrink-0" style={{ backgroundColor: a.courseColor }} />
+        <div className="mt-1 w-3 h-3 rounded-full flex-shrink-0" style={{ backgroundColor: a.course_color }} />
 
         <div className="flex-1 min-w-0">
           {/* Title row */}
@@ -95,19 +84,24 @@ function AssignmentCard({
               {a.title}
             </h3>
             <div className="flex items-center gap-2 flex-shrink-0">
-              {getDueBadge(a.dueDate, a.status)}
+              {getDueBadge(dueDate, a.status)}
             </div>
           </div>
 
           {/* Meta */}
           <div className="flex items-center gap-3 mt-1 flex-wrap">
-            <span className="text-xs text-gray-500 dark:text-gray-400">{a.course}</span>
+            <span className="text-xs text-gray-500 dark:text-gray-400">{a.course_name}</span>
             <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 dark:bg-white/10 text-gray-600 dark:text-gray-400">
               {TYPE_LABELS[a.type]}
             </span>
             <span className={`text-xs font-medium ${PRIORITY_COLORS[a.priority]}`}>
               ● {a.priority} priority
             </span>
+            {hasScore && (
+              <span className="text-xs font-semibold text-violet-600 dark:text-violet-400">
+                {a.points_earned}/{a.points_possible} ({pct}%)
+              </span>
+            )}
           </div>
 
           {/* Description */}
@@ -117,24 +111,34 @@ function AssignmentCard({
           <div className="flex items-center justify-between mt-3 gap-2 flex-wrap">
             <span className="text-xs text-gray-400 dark:text-gray-500 flex items-center gap-1">
               <Clock className="w-3 h-3" />
-              {format(a.dueDate, 'EEE, d MMM yyyy · h:mm a')}
+              {format(dueDate, 'EEE, d MMM yyyy · h:mm a')}
             </span>
-            {!done && (
-              <div className="flex gap-2">
+            <div className="flex gap-2">
+              {!done && (
+                <>
+                  <button
+                    onClick={() => onAskAI(a)}
+                    className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium text-violet-600 dark:text-violet-400 hover:bg-violet-50 dark:hover:bg-violet-900/20 border border-violet-200 dark:border-violet-700/50 transition-colors"
+                  >
+                    <MessageSquare className="w-3 h-3" /> Ask AI
+                  </button>
+                  <button
+                    onClick={() => onMarkComplete(a.id)}
+                    className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-700/50 transition-colors"
+                  >
+                    <CheckCircle2 className="w-3 h-3" /> Mark Complete
+                  </button>
+                </>
+              )}
+              {a.status === 'submitted' || a.status === 'graded' ? (
                 <button
-                  onClick={() => onAskAI(a)}
-                  className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium text-violet-600 dark:text-violet-400 hover:bg-violet-50 dark:hover:bg-violet-900/20 border border-violet-200 dark:border-violet-700/50 transition-colors"
+                  onClick={() => onGrade(a)}
+                  className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 border border-blue-200 dark:border-blue-700/50 transition-colors"
                 >
-                  <MessageSquare className="w-3 h-3" /> Ask AI
+                  <GraduationCap className="w-3 h-3" /> {hasScore ? 'Edit Grade' : 'Add Grade'}
                 </button>
-                <button
-                  onClick={() => onMarkComplete(a.id)}
-                  className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-700/50 transition-colors"
-                >
-                  <CheckCircle2 className="w-3 h-3" /> Mark Complete
-                </button>
-              </div>
-            )}
+              ) : null}
+            </div>
           </div>
         </div>
       </div>
@@ -142,12 +146,71 @@ function AssignmentCard({
   )
 }
 
-// ── Add Assignment Modal ──────────────────────────────────────────────────────
-function AddAssignmentModal({ isOpen, onClose, onAdd }: {
-  isOpen: boolean; onClose: () => void; onAdd: (a: Assignment) => void
+// ── Grade Modal ───────────────────────────────────────────────────────────────
+function GradeModal({ isOpen, assignment, onClose, onSave }: {
+  isOpen: boolean
+  assignment: Assignment | null
+  onClose: () => void
+  onSave: (id: string, pointsEarned: number, pointsPossible: number) => void
 }) {
+  const [earned, setEarned] = useState('')
+  const [possible, setPossible] = useState('')
+
+  useEffect(() => {
+    if (isOpen && assignment) {
+      setEarned(assignment.points_earned != null ? String(assignment.points_earned) : '')
+      setPossible(assignment.points_possible != null ? String(assignment.points_possible) : '')
+    }
+  }, [isOpen, assignment])
+
+  const field = 'w-full px-3 py-2 rounded-xl border border-gray-200 dark:border-white/10 bg-white dark:bg-white/5 text-gray-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-violet-500'
+
+  function handleSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    if (!assignment) return
+    const e1 = parseFloat(earned)
+    const p1 = parseFloat(possible)
+    if (Number.isNaN(e1) || Number.isNaN(p1) || p1 <= 0) return
+    onSave(assignment.id, e1, p1)
+    setEarned('')
+    setPossible('')
+    onClose()
+  }
+
+  return (
+    <Modal isOpen={isOpen} onClose={onClose} title={`Grade: ${assignment?.title ?? ''}`}>
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Points Earned</label>
+            <input type="number" step="0.1" min="0" className={field} value={earned}
+              onChange={e => setEarned(e.target.value)} />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Points Possible</label>
+            <input type="number" step="0.1" min="0.1" className={field} value={possible}
+              onChange={e => setPossible(e.target.value)} />
+          </div>
+        </div>
+        <div className="flex gap-3 pt-1">
+          <Button type="button" variant="secondary" className="flex-1" onClick={onClose}>Cancel</Button>
+          <Button type="submit" variant="primary" className="flex-1">Save Grade</Button>
+        </div>
+      </form>
+    </Modal>
+  )
+}
+
+// ── Add Assignment Modal ──────────────────────────────────────────────────────
+function AddAssignmentModal({ isOpen, onClose, onAdd, courses }: {
+  isOpen: boolean
+  onClose: () => void
+  onAdd: (a: { title: string; course_name: string; course_color: string; due_date: string; type: AssignmentType; priority: Priority; description: string }) => void
+  courses: { name: string; color: string }[]
+}) {
+  const defaultCourse = courses[0] ?? { name: '', color: '#7c3aed' }
   const [form, setForm] = useState({
-    title: '', course: COURSES[0].name, dueDate: '', type: 'assignment' as AssignmentType,
+    title: '', course: defaultCourse.name, dueDate: '', type: 'assignment' as AssignmentType,
     priority: 'medium' as Priority, description: '',
   })
 
@@ -156,14 +219,14 @@ function AddAssignmentModal({ isOpen, onClose, onAdd }: {
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     if (!form.title.trim() || !form.dueDate) return
-    const courseObj = COURSES.find(c => c.name === form.course) ?? COURSES[0]
+    const courseObj = courses.find(c => c.name === form.course) ?? defaultCourse
     onAdd({
-      id: Date.now(), title: form.title.trim(), course: form.course,
-      courseColor: courseObj.color, dueDate: new Date(form.dueDate),
-      type: form.type, status: 'pending', priority: form.priority,
-      description: form.description.trim(), xp: 10,
+      title: form.title.trim(), course_name: form.course,
+      course_color: courseObj.color, due_date: new Date(form.dueDate).toISOString(),
+      type: form.type, priority: form.priority,
+      description: form.description.trim(),
     })
-    setForm({ title: '', course: COURSES[0].name, dueDate: '', type: 'assignment', priority: 'medium', description: '' })
+    setForm({ title: '', course: defaultCourse.name, dueDate: '', type: 'assignment', priority: 'medium', description: '' })
     onClose()
   }
 
@@ -180,7 +243,7 @@ function AddAssignmentModal({ isOpen, onClose, onAdd }: {
             <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Course</label>
             <select className={field} value={form.course}
               onChange={e => setForm(f => ({ ...f, course: e.target.value }))}>
-              {COURSES.map(c => <option key={c.name} value={c.name}>{c.name}</option>)}
+              {courses.map(c => <option key={c.name} value={c.name}>{c.name}</option>)}
             </select>
           </div>
           <div>
@@ -221,30 +284,34 @@ function AddAssignmentModal({ isOpen, onClose, onAdd }: {
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
 export default function AssignmentsPage() {
-  const [assignments, setAssignments] = useState<Assignment[]>(INITIAL)
+  const { assignments, loading, addAssignment, updateAssignment, gradeAssignment } = useAssignments()
+  const { courses } = useCourses()
   const [statusFilter, setStatusFilter] = useState<'all' | Status>('all')
   const [courseFilter, setCourseFilter] = useState('all')
   const [showAdd, setShowAdd] = useState(false)
   const [showFilters, setShowFilters] = useState(false)
-  const [loading, setLoading] = useState(true)
+  const [gradingAssignment, setGradingAssignment] = useState<Assignment | null>(null)
   const navigate = useNavigate()
 
-  useEffect(() => {
-    const t = setTimeout(() => setLoading(false), 800)
-    return () => clearTimeout(t)
-  }, [])
+  const courseOptions = courses.length > 0
+    ? courses.map(c => ({ name: c.name, color: c.color }))
+    : [{ name: 'General', color: '#7c3aed' }]
 
-  function markComplete(id: number) {
-    setAssignments(prev => prev.map(a => a.id === id ? { ...a, status: 'submitted' } : a))
+  function markComplete(id: string) {
+    updateAssignment(id, { status: 'submitted' })
   }
 
   function askAI(a: Assignment) {
-    navigate(`/ai-tutor?assignment=${encodeURIComponent(a.title)}&course=${encodeURIComponent(a.course)}`)
+    navigate(`/ai-tutor?assignment=${encodeURIComponent(a.title)}&course=${encodeURIComponent(a.course_name)}`)
+  }
+
+  async function saveGrade(id: string, pointsEarned: number, pointsPossible: number) {
+    await gradeAssignment(id, pointsEarned, pointsPossible)
   }
 
   const filtered = assignments.filter(a => {
     if (statusFilter !== 'all' && a.status !== statusFilter) return false
-    if (courseFilter !== 'all' && a.course !== courseFilter) return false
+    if (courseFilter !== 'all' && a.course_name !== courseFilter) return false
     return true
   })
 
@@ -253,11 +320,11 @@ export default function AssignmentsPage() {
     const aDone = a.status === 'submitted' || a.status === 'graded'
     const bDone = b.status === 'submitted' || b.status === 'graded'
     if (aDone !== bDone) return aDone ? 1 : -1
-    return a.dueDate.getTime() - b.dueDate.getTime()
+    return new Date(a.due_date).getTime() - new Date(b.due_date).getTime()
   })
 
   const overdue = assignments.filter(a =>
-    isPast(a.dueDate) && !isToday(a.dueDate) && a.status === 'pending'
+    isPast(new Date(a.due_date)) && !isToday(new Date(a.due_date)) && a.status === 'pending'
   ).length
 
   const pending = assignments.filter(a => a.status === 'pending' || a.status === 'in_progress').length
@@ -272,7 +339,7 @@ export default function AssignmentsPage() {
 
   if (loading) {
     return (
-      <div className="p-6 max-w-4xl mx-auto space-y-4">
+      <div className="p-4 sm:p-6 max-w-4xl mx-auto space-y-4">
         <SkeletonLoader className="h-16 w-72 rounded-2xl" />
         <SkeletonLoader className="h-10 w-full rounded-2xl" />
         {[1, 2, 3, 4].map(i => <SkeletonLoader key={i} className="h-36 rounded-2xl" />)}
@@ -281,12 +348,12 @@ export default function AssignmentsPage() {
   }
 
   return (
-    <div className="p-6 max-w-4xl mx-auto space-y-5">
+    <div className="p-4 sm:p-6 max-w-4xl mx-auto space-y-5">
 
       {/* Header */}
-      <div className="flex items-start justify-between gap-4">
+      <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
         <div>
-          <h1 className="font-playfair text-3xl font-bold text-gray-900 dark:text-white">Assignments</h1>
+          <h1 className="font-playfair text-2xl sm:text-3xl font-bold text-gray-900 dark:text-white">Assignments</h1>
           <div className="flex items-center gap-3 mt-1">
             <span className="text-sm text-gray-500 dark:text-gray-400">{pending} pending</span>
             {overdue > 0 && (
@@ -296,10 +363,16 @@ export default function AssignmentsPage() {
             )}
           </div>
         </div>
-        <Button variant="primary" size="md" onClick={() => setShowAdd(true)}
-          className="flex items-center gap-2 flex-shrink-0">
-          <Plus className="w-4 h-4" /> Add
-        </Button>
+        <div className="flex items-center gap-2 flex-shrink-0">
+          <Button variant="secondary" size="md" onClick={() => exportAssignmentsToICS(assignments)}
+            className="flex items-center gap-2" disabled={assignments.length === 0}>
+            <Download className="w-4 h-4" /> <span className="hidden sm:inline">Export to Calendar</span><span className="sm:hidden">Export</span>
+          </Button>
+          <Button variant="primary" size="md" onClick={() => setShowAdd(true)}
+            className="flex items-center gap-2">
+            <Plus className="w-4 h-4" /> Add
+          </Button>
+        </div>
       </div>
 
       {/* Filters */}
@@ -343,7 +416,7 @@ export default function AssignmentsPage() {
               }`}>
               All courses
             </button>
-            {COURSES.map(c => (
+            {courseOptions.map(c => (
               <button key={c.name} onClick={() => setCourseFilter(c.name)}
                 className={`px-3 py-1 rounded-full text-xs font-medium border transition-colors ${
                   courseFilter === c.name
@@ -372,7 +445,13 @@ export default function AssignmentsPage() {
       ) : (
         <div className="space-y-3">
           {sorted.map(a => (
-            <AssignmentCard key={a.id} a={a} onMarkComplete={markComplete} onAskAI={askAI} />
+            <AssignmentCard
+              key={a.id}
+              a={a}
+              onMarkComplete={markComplete}
+              onAskAI={askAI}
+              onGrade={setGradingAssignment}
+            />
           ))}
         </div>
       )}
@@ -380,7 +459,15 @@ export default function AssignmentsPage() {
       <AddAssignmentModal
         isOpen={showAdd}
         onClose={() => setShowAdd(false)}
-        onAdd={a => setAssignments(prev => [a, ...prev])}
+        onAdd={a => addAssignment(a)}
+        courses={courseOptions}
+      />
+
+      <GradeModal
+        isOpen={gradingAssignment != null}
+        assignment={gradingAssignment}
+        onClose={() => setGradingAssignment(null)}
+        onSave={saveGrade}
       />
     </div>
   )
