@@ -46,7 +46,7 @@ const AI_MOCK: Record<string, string> = {
     "**Simplified:** Big Data Analytics is about working with huge amounts of data that normal computers can't handle. Hadoop is like a team of workers — each one handles a small piece of the data, then they combine results.",
 }
 
-type EditorMode = 'write' | 'draw' | 'preview'
+type EditorMode = 'write' | 'draw' | 'preview' | 'pdf'
 type DrawTool = 'pen' | 'highlighter' | 'eraser'
 
 interface Stroke {
@@ -160,6 +160,15 @@ export default function NotesPage() {
   const activePointerIdRef = useRef<number | null>(null)
   const activePointerTypeRef = useRef<string | null>(null)
 
+  // PDF state
+  const [pdfDoc, setPdfDoc] = useState<any>(null)
+  const [pdfPage, setPdfPage] = useState(1)
+  const [pdfAnnotations, setPdfAnnotations] = useState<Map<number, Stroke[]>>(new Map())
+  const [pdfRendering, setPdfRendering] = useState(false)
+  const pdfCanvasRef = useRef<HTMLCanvasElement>(null)
+  const annotationCanvasRef = useRef<HTMLCanvasElement>(null)
+  const prevPdfPageRef = useRef<number>(1)
+
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
@@ -230,6 +239,46 @@ export default function NotesPage() {
       drawStrokes(canvasRef.current, strokes)
     }
   }, [editorMode]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Render PDF page when pdfDoc or pdfPage changes
+  useEffect(() => {
+    if (!pdfDoc || !pdfCanvasRef.current) return
+    let cancelled = false
+    setPdfRendering(true)
+    ;(async () => {
+      try {
+        const page = await pdfDoc.getPage(pdfPage)
+        const viewport = page.getViewport({ scale: 1.5 })
+        const canvas = pdfCanvasRef.current!
+        canvas.width = viewport.width
+        canvas.height = viewport.height
+        if (annotationCanvasRef.current) {
+          annotationCanvasRef.current.width = viewport.width
+          annotationCanvasRef.current.height = viewport.height
+        }
+        const ctx = canvas.getContext('2d')!
+        await page.render({ canvasContext: ctx, viewport }).promise
+        if (!cancelled) {
+          const pageStrokes = pdfAnnotations.get(pdfPage) ?? []
+          if (annotationCanvasRef.current) {
+            drawStrokes(annotationCanvasRef.current, pageStrokes)
+          }
+          setStrokes(pageStrokes)
+          setPdfRendering(false)
+        }
+      } catch {
+        if (!cancelled) setPdfRendering(false)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [pdfDoc, pdfPage]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Re-draw annotation canvas whenever strokes change in PDF mode
+  useEffect(() => {
+    if (editorMode === 'pdf' && annotationCanvasRef.current) {
+      drawStrokes(annotationCanvasRef.current, strokes)
+    }
+  }, [strokes, editorMode])
 
   // Auto-save debounce (writes to the active page; falls back to note.content for page 1
   // when no note_pages row exists yet, e.g. legacy notes not yet backfilled)
@@ -384,21 +433,143 @@ export default function NotesPage() {
     []
   )
 
+  const getAnnotationCanvasPoint = useCallback(
+    (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
+      const canvas = annotationCanvasRef.current!
+      const rect = canvas.getBoundingClientRect()
+      const scaleX = canvas.width / rect.width
+      const scaleY = canvas.height / rect.height
+      if ('touches' in e) {
+        const touch = e.touches[0]
+        return { x: (touch.clientX - rect.left) * scaleX, y: (touch.clientY - rect.top) * scaleY }
+      }
+      return { x: (e.clientX - rect.left) * scaleX, y: (e.clientY - rect.top) * scaleY }
+    },
+    []
+  )
+
+  // Annotation canvas handlers for PDF mode
+  const handleAnnotationStart = useCallback(
+    (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
+      e.preventDefault()
+      isDrawing.current = true
+      const pt = getAnnotationCanvasPoint(e)
+      currentStrokeRef.current = { points: [pt], color: drawColor, size: drawSize, tool: drawTool }
+    },
+    [drawColor, drawSize, drawTool, getAnnotationCanvasPoint]
+  )
+
+  const handleAnnotationMove = useCallback(
+    (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
+      e.preventDefault()
+      if (!isDrawing.current || !currentStrokeRef.current) return
+      const pt = getAnnotationCanvasPoint(e)
+      currentStrokeRef.current = {
+        ...currentStrokeRef.current,
+        points: [...currentStrokeRef.current.points, pt],
+      }
+      if (annotationCanvasRef.current) {
+        drawStrokes(annotationCanvasRef.current, [...strokes, currentStrokeRef.current])
+      }
+    },
+    [getAnnotationCanvasPoint, strokes]
+  )
+
+  const handleAnnotationEnd = useCallback(() => {
+    if (!isDrawing.current || !currentStrokeRef.current) return
+    isDrawing.current = false
+    const finished = currentStrokeRef.current
+    currentStrokeRef.current = null
+    setStrokes((prev) => {
+      const next = [...prev, finished]
+      setPdfAnnotations((map) => {
+        const newMap = new Map(map)
+        newMap.set(pdfPage, next)
+        return newMap
+      })
+      return next
+    })
+  }, [pdfPage])
+
   const handleUndo = useCallback(() => {
     setStrokes((prev) => {
       const next = prev.slice(0, -1)
-      if (canvasRef.current) drawStrokes(canvasRef.current, next)
+      if (editorMode === 'pdf') {
+        if (annotationCanvasRef.current) drawStrokes(annotationCanvasRef.current, next)
+        setPdfAnnotations((map) => {
+          const newMap = new Map(map)
+          newMap.set(pdfPage, next)
+          return newMap
+        })
+      } else {
+        if (canvasRef.current) drawStrokes(canvasRef.current, next)
+      }
       return next
     })
-  }, [])
+  }, [editorMode, pdfPage])
 
   const handleClearCanvas = useCallback(() => {
     setStrokes([])
-    const canvas = canvasRef.current
-    if (!canvas) return
-    const ctx = canvas.getContext('2d')
-    ctx?.clearRect(0, 0, canvas.width, canvas.height)
+    if (editorMode === 'pdf') {
+      const canvas = annotationCanvasRef.current
+      if (!canvas) return
+      const ctx = canvas.getContext('2d')
+      ctx?.clearRect(0, 0, canvas.width, canvas.height)
+      setPdfAnnotations((map) => {
+        const newMap = new Map(map)
+        newMap.set(pdfPage, [])
+        return newMap
+      })
+    } else {
+      const canvas = canvasRef.current
+      if (!canvas) return
+      const ctx = canvas.getContext('2d')
+      ctx?.clearRect(0, 0, canvas.width, canvas.height)
+    }
+  }, [editorMode, pdfPage])
+
+  // ── PDF handlers ──────────────────────────────────────────────────────
+  const handlePdfFile = useCallback(async (file: File) => {
+    if (!file || file.type !== 'application/pdf') return
+    const reader = new FileReader()
+    reader.onload = async (ev) => {
+      const arrayBuffer = ev.target?.result as ArrayBuffer
+      const pdfjsLib: any = await import('pdfjs-dist')
+      pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
+        'pdfjs-dist/build/pdf.worker.min.mjs',
+        import.meta.url
+      ).toString()
+      const doc = await pdfjsLib.getDocument({ data: arrayBuffer }).promise
+      setPdfDoc(doc)
+      setPdfPage(1)
+      prevPdfPageRef.current = 1
+      setPdfAnnotations(new Map())
+      setStrokes([])
+    }
+    reader.readAsArrayBuffer(file)
   }, [])
+
+  const handlePdfDrop = useCallback(
+    (e: React.DragEvent<HTMLDivElement>) => {
+      e.preventDefault()
+      const file = e.dataTransfer.files[0]
+      if (file) handlePdfFile(file)
+    },
+    [handlePdfFile]
+  )
+
+  const handlePdfPageChange = useCallback(
+    (newPage: number) => {
+      setPdfAnnotations((map) => {
+        const newMap = new Map(map)
+        newMap.set(prevPdfPageRef.current, strokes)
+        return newMap
+      })
+      prevPdfPageRef.current = newPage
+      setPdfPage(newPage)
+    },
+    [strokes]
+  )
 
   const handleConvertToText = useCallback(async () => {
     const canvas = canvasRef.current
@@ -820,6 +991,19 @@ export default function NotesPage() {
                       {mode}
                     </button>
                   ))}
+                  {/* PDF tab */}
+                  <button
+                    onClick={() => setEditorMode('pdf')}
+                    className={[
+                      'px-3 py-1 text-xs font-medium rounded-lg flex items-center gap-1 transition-colors',
+                      editorMode === 'pdf'
+                        ? 'bg-white dark:bg-white/10 text-gray-900 dark:text-white shadow-sm'
+                        : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200',
+                    ].join(' ')}
+                  >
+                    <FileText size={12} />
+                    PDF
+                  </button>
                 </div>
               </div>
             </div>
@@ -1045,8 +1229,8 @@ export default function NotesPage() {
               </div>
             )}
 
-            {/* Draw mode toolbar */}
-            {editorMode === 'draw' && (
+            {/* Draw / PDF mode toolbar */}
+            {(editorMode === 'draw' || editorMode === 'pdf') && (
               <div className="flex flex-wrap items-center gap-3 px-4 py-2 border-b border-gray-200 dark:border-white/10 flex-shrink-0">
                 {/* Tools */}
                 <div className="flex items-center gap-1">
@@ -1128,19 +1312,136 @@ export default function NotesPage() {
                   >
                     <Trash2 size={16} />
                   </button>
+                  {editorMode === 'draw' && (
+                    <button
+                      onClick={handleConvertToText}
+                      disabled={ocrLoading || strokes.length === 0}
+                      className="flex items-center gap-1 px-2 py-1.5 rounded-md text-sm text-violet-600 dark:text-violet-400 hover:bg-violet-50 dark:hover:bg-violet-900/20 disabled:opacity-40 transition-colors"
+                      title="Convert handwriting to text"
+                    >
+                      {ocrLoading ? (
+                        <Loader2 size={16} className="animate-spin" />
+                      ) : (
+                        <Type size={16} />
+                      )}
+                      <span className="text-xs hidden sm:inline">Convert to Text</span>
+                    </button>
+                  )}
+                  {editorMode === 'pdf' && pdfDoc && (
+                    <button
+                      onClick={() => {
+                        setPdfDoc(null)
+                        setPdfPage(1)
+                        setPdfAnnotations(new Map())
+                        setStrokes([])
+                      }}
+                      className="px-2 py-1 text-xs rounded-md text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+                      title="Clear PDF"
+                    >
+                      Clear PDF
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* PDF mode toolbar */}
+            {editorMode === 'pdf' && (
+              <div className="flex flex-wrap items-center gap-3 px-4 py-2 border-b border-gray-200 dark:border-white/10 flex-shrink-0">
+                {/* Tools */}
+                <div className="flex items-center gap-1">
+                  {(
+                    [
+                      ['pen', Pen],
+                      ['highlighter', Highlighter],
+                      ['eraser', Eraser],
+                    ] as [DrawTool, React.ElementType][]
+                  ).map(([tool, Icon]) => (
+                    <button
+                      key={tool}
+                      title={tool}
+                      onClick={() => setDrawTool(tool)}
+                      className={[
+                        'p-1.5 rounded-md transition-colors capitalize',
+                        drawTool === tool
+                          ? 'bg-violet-100 dark:bg-violet-900/40 text-violet-600 dark:text-violet-400'
+                          : 'text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-white/10',
+                      ].join(' ')}
+                    >
+                      <Icon size={16} />
+                    </button>
+                  ))}
+                </div>
+
+                {/* Colors */}
+                <div className="flex items-center gap-1">
+                  {DRAW_COLORS.map((c) => (
+                    <button
+                      key={c}
+                      onClick={() => setDrawColor(c)}
+                      title={c}
+                      className={[
+                        'w-5 h-5 rounded-full border-2 transition-transform',
+                        drawColor === c ? 'border-white scale-125' : 'border-transparent',
+                      ].join(' ')}
+                      style={{ backgroundColor: c }}
+                    />
+                  ))}
+                </div>
+
+                {/* Sizes */}
+                <div className="flex items-center gap-1">
+                  {DRAW_SIZES.map((s) => (
+                    <button
+                      key={s}
+                      onClick={() => setDrawSize(s)}
+                      title={`Size ${s}`}
+                      className={[
+                        'flex items-center justify-center w-6 h-6 rounded-md transition-colors',
+                        drawSize === s
+                          ? 'bg-violet-100 dark:bg-violet-900/40 text-violet-600'
+                          : 'text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-white/10',
+                      ].join(' ')}
+                    >
+                      <span
+                        className="rounded-full bg-current"
+                        style={{ width: Math.min(s, 12), height: Math.min(s, 12) }}
+                      />
+                    </button>
+                  ))}
+                </div>
+
+                {/* Undo / Clear / Clear PDF */}
+                <div className="flex items-center gap-1 ml-auto">
                   <button
-                    onClick={handleConvertToText}
-                    disabled={ocrLoading || strokes.length === 0}
-                    className="flex items-center gap-1 px-2 py-1.5 rounded-md text-sm text-violet-600 dark:text-violet-400 hover:bg-violet-50 dark:hover:bg-violet-900/20 disabled:opacity-40 transition-colors"
-                    title="Convert handwriting to text"
+                    onClick={handleUndo}
+                    disabled={strokes.length === 0}
+                    className="p-1.5 rounded-md text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-white/10 disabled:opacity-40 transition-colors"
+                    title="Undo"
                   >
-                    {ocrLoading ? (
-                      <Loader2 size={16} className="animate-spin" />
-                    ) : (
-                      <Type size={16} />
-                    )}
-                    <span className="text-xs hidden sm:inline">Convert to Text</span>
+                    <Undo2 size={16} />
                   </button>
+                  <button
+                    onClick={handleClearCanvas}
+                    className="p-1.5 rounded-md text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-white/10 transition-colors"
+                    title="Clear annotations"
+                  >
+                    <Trash2 size={16} />
+                  </button>
+                  {pdfDoc && (
+                    <button
+                      onClick={() => {
+                        setPdfDoc(null)
+                        setPdfPage(1)
+                        setPdfAnnotations(new Map())
+                        setStrokes([])
+                      }}
+                      className="px-2 py-1 text-xs rounded-md text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+                      title="Clear PDF"
+                    >
+                      Clear PDF
+                    </button>
+                  )}
                 </div>
               </div>
             )}
@@ -1182,6 +1483,85 @@ export default function NotesPage() {
               {editorMode === 'preview' && (
                 <div className="prose prose-sm dark:prose-invert max-w-none">
                   <ReactMarkdown>{draftContent}</ReactMarkdown>
+                </div>
+              )}
+
+              {editorMode === 'pdf' && (
+                <div className="flex flex-col gap-4">
+                  {!pdfDoc ? (
+                    <div
+                      onDrop={handlePdfDrop}
+                      onDragOver={(e) => e.preventDefault()}
+                      onClick={() => {
+                        const input = document.createElement('input')
+                        input.type = 'file'
+                        input.accept = 'application/pdf'
+                        input.onchange = (ev) => {
+                          const file = (ev.target as HTMLInputElement).files?.[0]
+                          if (file) handlePdfFile(file)
+                        }
+                        input.click()
+                      }}
+                      className="flex flex-col items-center justify-center border-2 border-dashed border-gray-300 dark:border-white/20 rounded-xl p-12 cursor-pointer hover:border-violet-400 dark:hover:border-violet-500 transition-colors"
+                    >
+                      <FileText size={40} className="text-gray-300 dark:text-gray-600 mb-3" />
+                      <p className="text-sm text-gray-500 dark:text-gray-400 text-center">
+                        Drop a PDF here or click to upload
+                      </p>
+                      <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
+                        Annotations are saved per-session
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="flex flex-col gap-3">
+                      {/* Page navigator */}
+                      <div className="flex items-center gap-2 justify-center">
+                        <button
+                          onClick={() => handlePdfPageChange(Math.max(1, pdfPage - 1))}
+                          disabled={pdfPage <= 1}
+                          className="p-1.5 rounded-md text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-white/10 disabled:opacity-30 transition-colors"
+                        >
+                          <ChevronLeft size={16} />
+                        </button>
+                        <span className="text-sm text-gray-600 dark:text-gray-300">
+                          Page {pdfPage} of {pdfDoc.numPages}
+                        </span>
+                        <button
+                          onClick={() => handlePdfPageChange(Math.min(pdfDoc.numPages, pdfPage + 1))}
+                          disabled={pdfPage >= pdfDoc.numPages}
+                          className="p-1.5 rounded-md text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-white/10 disabled:opacity-30 transition-colors"
+                        >
+                          <ChevronRight size={16} />
+                        </button>
+                      </div>
+
+                      {/* Canvas stack */}
+                      <div className="relative inline-block self-start w-full overflow-auto">
+                        {pdfRendering && (
+                          <div className="absolute inset-0 flex items-center justify-center z-10 bg-white/50 dark:bg-gray-950/50 rounded-xl">
+                            <Loader2 size={32} className="animate-spin text-violet-500" />
+                          </div>
+                        )}
+                        <canvas
+                          ref={pdfCanvasRef}
+                          className="block rounded-xl border border-gray-200 dark:border-white/10"
+                          style={{ pointerEvents: 'none' }}
+                        />
+                        <canvas
+                          ref={annotationCanvasRef}
+                          className="absolute top-0 left-0 rounded-xl cursor-crosshair"
+                          style={{ pointerEvents: 'auto', touchAction: 'none' }}
+                          onMouseDown={handleAnnotationStart}
+                          onMouseMove={handleAnnotationMove}
+                          onMouseUp={handleAnnotationEnd}
+                          onMouseLeave={handleAnnotationEnd}
+                          onTouchStart={handleAnnotationStart}
+                          onTouchMove={handleAnnotationMove}
+                          onTouchEnd={handleAnnotationEnd}
+                        />
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
 
